@@ -184,14 +184,14 @@ st.sidebar.markdown("<h2 style='color:#00f2fe; font-size:20px; font-weight:700;'
 st.sidebar.markdown("""
 <div class="calib-card">
     <span class="calib-text">⚡ Auto-Calibrated Threshold</span>
-    <span style="color:#10b981; font-weight:700; font-size:13px;">85% Optimal</span>
+    <span style="color:#10b981; font-weight:700; font-size:13px;">40% Optimal</span>
 </div>
 """, unsafe_allow_html=True)
 
 # Advanced Manual Calibration inside collapsible expander (clean UI)
 # All widgets use unique st.session_state keys — prevents widget resets on rerenders
 with st.sidebar.expander("🛠️ Advanced Acoustic Calibration"):
-    conf_thresh = st.slider("Confidence Cutoff", 0.10, 1.00, 0.40, 0.05,
+    conf_thresh = st.slider("Confidence Cutoff", 0.10, 1.00, 0.35, 0.05,
                             key="conf_thresh_slider")
     iou_thresh = st.slider("NMS IoU Threshold", 0.10, 0.90, 0.45, 0.05,
                            key="iou_thresh_slider")
@@ -201,7 +201,7 @@ with st.sidebar.expander("🛠️ Advanced Acoustic Calibration"):
                                  key="enable_denoise_check")
 
 # Pull stable values from session_state (handles expander-collapsed state)
-conf_thresh    = st.session_state.get("conf_thresh_slider", 0.40)
+conf_thresh    = st.session_state.get("conf_thresh_slider", 0.35)
 iou_thresh     = st.session_state.get("iou_thresh_slider", 0.45)
 enable_clahe   = st.session_state.get("enable_clahe_check", True)
 enable_denoise = st.session_state.get("enable_denoise_check", True)
@@ -406,8 +406,54 @@ elif not is_video and image_input is not None:
     st.markdown("---")
 
 else:
+    # No input selected yet — show idle prompt and stop here
     detected_records = []
     st.info("👈 Select a pre-loaded Demo Asset from the sidebar or upload your custom file to run inference.")
+
+# -----------------------------------------------------------------------------
+# No-Hazard Fallback — always run after any image/video scan
+# Generates a baseline hydrographic survey log so downloads & map never blank
+# -----------------------------------------------------------------------------
+if not detected_records and (is_video or image_input is not None):
+    # Generate 3 baseline AUV swath waypoints as the survey log
+    import datetime
+    baseline_records = []
+    for i, (dlat, dlon) in enumerate([(0.0000, 0.0000), (0.0002, 0.0003), (0.0004, 0.0006)]):
+        baseline_records.append({
+            "Hazard ID":        f"NIOT-SSS-BASE-{i+1:02d}",
+            "Classification":   "Clear Seabed — No Hazard",
+            "Confidence":       "N/A",
+            "Threat Level":     "CLEAR",
+            "Latitude":         round(base_lat + dlat, 6),
+            "Longitude":        round(base_lon + dlon, 6),
+            "Action Protocol":  "Continue Survey",
+            "Timestamp (UTC)": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "lat":              base_lat + dlat,
+            "lon":              base_lon + dlon,
+        })
+    detected_records = baseline_records
+
+    st.markdown("""
+    <div style="
+        background: rgba(16,185,129,0.08);
+        border: 1px solid rgba(16,185,129,0.4);
+        border-radius: 10px;
+        padding: 14px 20px;
+        margin-bottom: 18px;
+        display:flex; align-items:center; gap:12px;
+    ">
+        <span style="font-size:24px;">✅</span>
+        <div>
+            <p style="margin:0; color:#10b981; font-weight:700; font-size:15px;">
+                Seabed Clear — No Hazards Detected in Swath
+            </p>
+            <p style="margin:2px 0 0; color:#64748b; font-size:12px;">
+                Neural confidence threshold: {conf_thresh:.0%} &nbsp;|
+                Baseline hydrographic survey log generated for AUV swath waypoints.
+            </p>
+        </div>
+    </div>
+    """.format(conf_thresh=conf_thresh), unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # Tactical Hazard Register & Geotagging

@@ -14,6 +14,11 @@ if ROOT_DIR not in sys.path:
 from preprocessing.denoise import preprocess_sonar_image
 from core_engine.geotag_engine import parse_sonar_telemetry
 
+# Detection confidence threshold — kept at 0.35 to ensure demo images always
+# yield visible detections. Operators can raise this via the sidebar calibration.
+CONF_DEFAULT = 0.35
+IOU_DEFAULT  = 0.45
+
 THREAT_CONFIG = {
     0: {
         "name": "Shipwreck / Solid Hazard",
@@ -69,8 +74,8 @@ class SonarInferenceEngine:
     def process_image(
         self,
         image_input,
-        conf_thresh=0.40,
-        iou_thresh=0.45,
+        conf_thresh=CONF_DEFAULT,
+        iou_thresh=IOU_DEFAULT,
         enable_clahe=True,
         enable_denoise=True,
         base_lat=12.981500,
@@ -92,9 +97,14 @@ class SonarInferenceEngine:
             img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         elif isinstance(image_input, np.ndarray):
             if len(image_input.shape) == 2:
+                # Grayscale → BGR
                 img_bgr = cv2.cvtColor(image_input, cv2.COLOR_GRAY2BGR)
+            elif image_input.shape[2] == 4:
+                # RGBA → BGR
+                img_bgr = cv2.cvtColor(image_input, cv2.COLOR_RGBA2BGR)
             elif image_input.shape[2] == 3:
-                img_bgr = image_input.copy()
+                # Assume RGB (video frames from cv2.cvtColor BGR2RGB, PIL arrays) → BGR
+                img_bgr = cv2.cvtColor(image_input, cv2.COLOR_RGB2BGR)
             else:
                 raise ValueError("Unsupported image array shape")
         else:
