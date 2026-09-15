@@ -1,0 +1,9 @@
+path: data/multi_debris_dataset
+train: images/train
+val: images/val
+
+names:
+  0: Shipwreck
+  1: Subsea_Pipeline
+  2: Ghost_Net
+  3: Marine_Debris
