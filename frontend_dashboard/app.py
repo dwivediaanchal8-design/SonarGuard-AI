@@ -151,8 +151,12 @@ st.markdown("""
 # -----------------------------------------------------------------------------
 # Model Initialization
 # -----------------------------------------------------------------------------
-@st.cache_resource
+@st.cache_resource(show_spinner="⚙️ Loading AquaScan neural weights...")
 def load_inference_engine():
+    """
+    Singleton model loader — called exactly once per Streamlit server lifecycle.
+    @st.cache_resource ensures YOLO weights are never re-instantiated on rerenders.
+    """
     return SonarInferenceEngine()
 
 try:
@@ -160,6 +164,16 @@ try:
 except Exception as e:
     st.error(f"❌ Critical Failure: Unable to load Sonar Inference Engine weights: {e}")
     st.stop()
+
+# -----------------------------------------------------------------------------
+# Demo Asset Pre-loading — @st.cache_data so disk I/O happens once per session
+# -----------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def load_demo_image(image_path: str):
+    """Load and cache a demo image from disk. Prevents repeated disk reads on rerenders."""
+    if os.path.exists(image_path):
+        return Image.open(image_path).convert("RGB")
+    return None
 
 # -----------------------------------------------------------------------------
 # Sidebar Controls & Auto-Calibrated Thresholds
@@ -175,21 +189,29 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 # Advanced Manual Calibration inside collapsible expander (clean UI)
+# All widgets use unique st.session_state keys — prevents widget resets on rerenders
 with st.sidebar.expander("🛠️ Advanced Acoustic Calibration"):
-    conf_thresh = st.slider("Confidence Cutoff", 0.10, 1.00, 0.40, 0.05)
-    iou_thresh = st.slider("NMS IoU Threshold", 0.10, 0.90, 0.45, 0.05)
-    enable_clahe = st.checkbox("CLAHE Contrast Equalization", value=True)
-    enable_denoise = st.checkbox("Lee & Bilateral Speckle Filter", value=True)
-if 'conf_thresh' not in locals():
-    conf_thresh = 0.40
-    iou_thresh = 0.45
-    enable_clahe = True
-    enable_denoise = True
+    conf_thresh = st.slider("Confidence Cutoff", 0.10, 1.00, 0.40, 0.05,
+                            key="conf_thresh_slider")
+    iou_thresh = st.slider("NMS IoU Threshold", 0.10, 0.90, 0.45, 0.05,
+                           key="iou_thresh_slider")
+    enable_clahe = st.checkbox("CLAHE Contrast Equalization", value=True,
+                               key="enable_clahe_check")
+    enable_denoise = st.checkbox("Lee & Bilateral Speckle Filter", value=True,
+                                 key="enable_denoise_check")
+
+# Pull stable values from session_state (handles expander-collapsed state)
+conf_thresh    = st.session_state.get("conf_thresh_slider", 0.40)
+iou_thresh     = st.session_state.get("iou_thresh_slider", 0.45)
+enable_clahe   = st.session_state.get("enable_clahe_check", True)
+enable_denoise = st.session_state.get("enable_denoise_check", True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 AUV Origin Coords")
-base_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.6f")
-base_lon = st.sidebar.number_input("Longitude (°E)", value=80.270700, format="%.6f")
+base_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.6f",
+                                   key="base_lat_input")
+base_lon = st.sidebar.number_input("Longitude (°E)", value=80.270700, format="%.6f",
+                                   key="base_lon_input")
 
 # Pre-loaded Demo Test Assets
 demo_assets = {
@@ -201,7 +223,8 @@ demo_assets = {
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📁 Input Test Asset")
-selected_asset_key = st.sidebar.selectbox("Select Sonar Input Source", list(demo_assets.keys()))
+selected_asset_key = st.sidebar.selectbox("Select Sonar Input Source", list(demo_assets.keys()),
+                                          key="asset_selector")
 
 # -----------------------------------------------------------------------------
 # Top Branding & Identity Banner
@@ -267,9 +290,14 @@ st.markdown("<br>", unsafe_allow_html=True)
 input_file_path = None
 is_video = False
 uploaded_file = None
+image_input = None  # Always initialize to avoid NameError in branching paths
 
 if selected_asset_key == "Upload Custom File (PNG/JPG or MP4)":
-    uploaded_file = st.file_uploader("Upload Sonar Scan Image (.png, .jpg) or AUV Stream Video (.mp4)", type=["png", "jpg", "jpeg", "mp4"])
+    uploaded_file = st.file_uploader(
+        "Upload Sonar Scan Image (.png, .jpg) or AUV Stream Video (.mp4)",
+        type=["png", "jpg", "jpeg", "mp4"],
+        key="file_uploader"
+    )
     if uploaded_file is not None:
         if uploaded_file.name.lower().endswith(".mp4"):
             is_video = True
@@ -279,8 +307,6 @@ if selected_asset_key == "Upload Custom File (PNG/JPG or MP4)":
         else:
             is_video = False
             image_input = Image.open(uploaded_file).convert("RGB")
-    else:
-        image_input = None
 else:
     target_path = demo_assets[selected_asset_key]
     if target_path and os.path.exists(target_path):
@@ -289,9 +315,8 @@ else:
             input_file_path = target_path
         else:
             is_video = False
-            image_input = Image.open(target_path).convert("RGB")
-    else:
-        image_input = None
+            # Cached loader — avoids disk I/O on every rerender
+            image_input = load_demo_image(target_path)
 
 # -----------------------------------------------------------------------------
 # Processing Pipeline Execution
@@ -351,7 +376,7 @@ if is_video and input_file_path and os.path.exists(input_file_path):
 
     detected_records = all_records
 
-elif not is_video and 'image_input' in locals() and image_input is not None:
+elif not is_video and image_input is not None:
     with st.spinner("Processing acoustic scan through neural pipeline & hydrographic engine..."):
         result = engine.process_image(
             image_input=image_input,
