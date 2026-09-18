@@ -2,17 +2,22 @@ import os
 import sys
 import json
 import tempfile
-import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
 import streamlit as st
 from pathlib import Path
 
-# Ensure workspace root directory is in sys.path for modular imports
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+# ---------------------------------------------------------------------------
+# Dynamic Root Resolution
+# On Streamlit Community Cloud, the repo is mounted at /mount/src/<repo>/
+# On local dev, __file__ is inside frontend_dashboard/.
+# Anchoring to __file__ guarantees correct resolution in every environment.
+# ---------------------------------------------------------------------------
+_THIS_DIR = Path(__file__).resolve().parent            # frontend_dashboard/
+ROOT_DIR  = _THIS_DIR.parent                           # workspace root
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from backend_api.inference import SonarInferenceEngine
 
@@ -23,6 +28,19 @@ try:
     HAS_FOLIUM = True
 except ImportError:
     HAS_FOLIUM = False
+
+# ---------------------------------------------------------------------------
+# Safe cv2 import — opencv-python-headless is required on cloud servers
+# ---------------------------------------------------------------------------
+try:
+    import cv2
+except ImportError as _cv2_err:
+    st.error(
+        "❌ **OpenCV is not installed.** "
+        "Ensure `opencv-python-headless` is listed in `requirements.txt` and redeploy.\n\n"
+        f"Detail: {_cv2_err}"
+    )
+    st.stop()
 
 # -----------------------------------------------------------------------------
 # Page Configuration & Deep Oceanic Onyx Theme
@@ -213,12 +231,15 @@ base_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.
 base_lon = st.sidebar.number_input("Longitude (°E)", value=80.270700, format="%.6f",
                                    key="base_lon_input")
 
-# Pre-loaded Demo Test Assets
+# ---------------------------------------------------------------------------
+# Demo Test Assets — resolved against ROOT_DIR so they work on any host
+# ---------------------------------------------------------------------------
+_DEMO_DIR = ROOT_DIR / "demo_test_assets"
 demo_assets = {
-    "[Demo Image 1] Shipwreck Anomaly Scan": "demo_test_assets/test_shipwreck.png",
-    "[Demo Image 2] Subsea Pipeline Infrastructure": "demo_test_assets/test_subsea_pipeline.png",
-    "[Demo Video Stream] Live AUV Sonar Stream (.mp4)": "demo_test_assets/test_sonar_stream.mp4",
-    "Upload Custom File (PNG/JPG or MP4)": None
+    "[Demo Image 1] Shipwreck Anomaly Scan":                   str(_DEMO_DIR / "test_shipwreck.png"),
+    "[Demo Image 2] Subsea Pipeline Infrastructure":           str(_DEMO_DIR / "test_subsea_pipeline.png"),
+    "[Demo Video Stream] Live AUV Sonar Stream (.mp4)":        str(_DEMO_DIR / "test_sonar_stream.mp4"),
+    "Upload Custom File (PNG/JPG or MP4)":                     None,
 }
 
 st.sidebar.markdown("---")
@@ -286,6 +307,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # Input Asset Ingestion & Video Stream Processing
+# (Wrapped in defensive try-except so corrupt uploads show a friendly alert)
 # -----------------------------------------------------------------------------
 input_file_path = None
 is_video = False
@@ -299,14 +321,23 @@ if selected_asset_key == "Upload Custom File (PNG/JPG or MP4)":
         key="file_uploader"
     )
     if uploaded_file is not None:
-        if uploaded_file.name.lower().endswith(".mp4"):
-            is_video = True
-            tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-            tfile.write(uploaded_file.read())
-            input_file_path = tfile.name
-        else:
-            is_video = False
-            image_input = Image.open(uploaded_file).convert("RGB")
+        try:
+            if uploaded_file.name.lower().endswith(".mp4"):
+                is_video = True
+                tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+                tfile.write(uploaded_file.read())
+                tfile.flush()
+                input_file_path = tfile.name
+            else:
+                is_video = False
+                image_input = Image.open(uploaded_file).convert("RGB")
+        except Exception as upload_err:
+            st.error(
+                f"⚠️ **Could not process the uploaded file** — it may be corrupted or in an unsupported format.\n\n"
+                f"Detail: `{upload_err}`"
+            )
+            image_input = None
+            input_file_path = None
 else:
     target_path = demo_assets[selected_asset_key]
     if target_path and os.path.exists(target_path):
@@ -351,22 +382,25 @@ if is_video and input_file_path and os.path.exists(input_file_path):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Process frame through inference engine
-        res = engine.process_image(
-            image_input=rgb_frame,
-            conf_thresh=conf_thresh,
-            iou_thresh=iou_thresh,
-            enable_clahe=enable_clahe,
-            enable_denoise=enable_denoise,
-            base_lat=base_lat + (frame_idx * 0.00001),
-            base_lon=base_lon + (frame_idx * 0.00001)
-        )
+        try:
+            res = engine.process_image(
+                image_input=rgb_frame,
+                conf_thresh=conf_thresh,
+                iou_thresh=iou_thresh,
+                enable_clahe=enable_clahe,
+                enable_denoise=enable_denoise,
+                base_lat=base_lat + (frame_idx * 0.00001),
+                base_lon=base_lon + (frame_idx * 0.00001)
+            )
 
-        raw_placeholder.image(res["preprocessed_rgb"], use_container_width=True)
-        annotated_placeholder.image(res["annotated_rgb"], use_container_width=True)
+            raw_placeholder.image(res["preprocessed_rgb"], use_container_width=True)
+            annotated_placeholder.image(res["annotated_rgb"], use_container_width=True)
 
-        for rec in res["records"]:
-            rec["Frame"] = frame_idx
-            all_records.append(rec)
+            for rec in res["records"]:
+                rec["Frame"] = frame_idx
+                all_records.append(rec)
+        except Exception as frame_err:
+            status_text.warning(f"⚠️ Skipped frame {frame_idx}: {frame_err}")
 
         progress_bar.progress(min(1.0, frame_idx / float(total_frames)))
         status_text.text(f"Processing AUV Ping Frame {frame_idx}/{total_frames} | Stream FPS: {fps:.1f}")
@@ -378,32 +412,42 @@ if is_video and input_file_path and os.path.exists(input_file_path):
 
 elif not is_video and image_input is not None:
     with st.spinner("Processing acoustic scan through neural pipeline & hydrographic engine..."):
-        result = engine.process_image(
-            image_input=image_input,
-            conf_thresh=conf_thresh,
-            iou_thresh=iou_thresh,
-            enable_clahe=enable_clahe,
-            enable_denoise=enable_denoise,
-            base_lat=base_lat,
-            base_lon=base_lon
-        )
+        try:
+            result = engine.process_image(
+                image_input=image_input,
+                conf_thresh=conf_thresh,
+                iou_thresh=iou_thresh,
+                enable_clahe=enable_clahe,
+                enable_denoise=enable_denoise,
+                base_lat=base_lat,
+                base_lon=base_lon
+            )
+        except Exception as img_err:
+            st.error(
+                f"⚠️ **Inference failed on this image.** The file may be corrupted or in an unsupported format.\n\n"
+                f"Detail: `{img_err}`"
+            )
+            result = None
 
-    preprocessed_rgb = result["preprocessed_rgb"]
-    annotated_rgb = result["annotated_rgb"]
-    detected_records = result["records"]
+    if result is not None:
+        preprocessed_rgb = result["preprocessed_rgb"]
+        annotated_rgb = result["annotated_rgb"]
+        detected_records = result["records"]
 
-    st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>🔍 Sonar Dual-View Inspector</h3>", unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
+        st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>🔍 Sonar Dual-View Inspector</h3>", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
 
-    with col1:
-        st.markdown("**1. Preprocessed Sonar Waterfall (Lee Filter + CLAHE)**")
-        st.image(preprocessed_rgb, use_container_width=True)
+        with col1:
+            st.markdown("**1. Preprocessed Sonar Waterfall (Lee Filter + CLAHE)**")
+            st.image(preprocessed_rgb, use_container_width=True)
 
-    with col2:
-        st.markdown("**2. Real-Time Detection & Tactical Anomaly Overlay**")
-        st.image(annotated_rgb, use_container_width=True)
+        with col2:
+            st.markdown("**2. Real-Time Detection & Tactical Anomaly Overlay**")
+            st.image(annotated_rgb, use_container_width=True)
 
-    st.markdown("---")
+        st.markdown("---")
+    else:
+        detected_records = []
 
 else:
     # No input selected yet — show idle prompt and stop here

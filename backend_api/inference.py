@@ -6,8 +6,13 @@ from pathlib import Path
 from PIL import Image
 from ultralytics import YOLO
 
-# Ensure workspace root directory is in sys.path
-ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# ---------------------------------------------------------------------------
+# Dynamic Root Resolution — works on both local dev and Streamlit Cloud
+# Streamlit Cloud mounts repos at /mount/src/<repo-name>/, so we resolve
+# relative to this file's location rather than relying on CWD.
+# ---------------------------------------------------------------------------
+_THIS_DIR = Path(__file__).resolve().parent          # backend_api/
+ROOT_DIR  = str(_THIS_DIR.parent)                    # workspace root
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
@@ -53,20 +58,24 @@ class SonarInferenceEngine:
     """
 
     def __init__(self, model_path=None):
+        root = Path(ROOT_DIR)
         if model_path is None:
             possible_paths = [
-                "models/best.pt",
-                "models/multiclass_sonar_v2/weights/best.pt",
-                "model/best.pt"
+                root / "models" / "best.pt",
+                root / "models" / "multiclass_sonar_v2" / "weights" / "best.pt",
+                root / "model" / "best.pt",
             ]
             for p in possible_paths:
-                if os.path.exists(p):
-                    model_path = p
+                if p.exists():
+                    model_path = str(p)
                     break
-        
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model weights file not found. Tried paths: {possible_paths if model_path is None else model_path}")
-            
+
+        if not model_path or not Path(model_path).exists():
+            tried = [str(p) for p in possible_paths] if model_path is None else [model_path]
+            raise FileNotFoundError(
+                f"Model weights file not found. Tried paths: {tried}"
+            )
+
         self.model_path = model_path
         self.model = YOLO(model_path)
         print(f"[OK] SonarInferenceEngine initialized with weights: {self.model_path}")
@@ -191,10 +200,11 @@ if __name__ == "__main__":
     print("Inference Engine module initialized successfully.")
 
     # Find sample sonar image for verification check
+    root = Path(ROOT_DIR)
     sample_dirs = [
-        Path("data/multi_debris_dataset/images/val"),
-        Path("data/yolo_dataset/images/val"),
-        Path("data/AI4Shipwrecks/test/images")
+        root / "data" / "multi_debris_dataset" / "images" / "val",
+        root / "data" / "yolo_dataset" / "images" / "val",
+        root / "data" / "AI4Shipwrecks" / "test" / "images",
     ]
     sample_img = None
     for s_dir in sample_dirs:
@@ -216,3 +226,4 @@ if __name__ == "__main__":
         print("=" * 60)
     else:
         print("Warning: No sample sonar image found for live inference verification test.")
+
