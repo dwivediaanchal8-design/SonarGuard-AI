@@ -1,198 +1,130 @@
 """
 core_engine/geotag_engine.py
-============================
-Hydrographic Geotagging Engine
---------------------------------
-Translates pixel-domain bounding-box detections from side-scan sonar (SSS)
-imagery into geo-referenced records with:
-  - GPS coordinates derived from AUV origin + pixel offsets
-  - Physical dimension estimates from bounding-box pixel extents
-  - Structured CSV and GeoJSON exports for mission reporting
+Translates pixel-domain bounding-box detections into geo-referenced hazard records.
 
-**Coordinate Reference**
-AUV survey origin defaults to Bay of Bengal offshore waters:
-  Lat  13.0827 °N  |  Lon  80.4500 °E
-(approximately 20 km east of Chennai, beyond the 200 m isobath)
+Survey origin defaults to Bay of Bengal offshore waters (13.0827 °N, 80.4500 °E),
+approximately 20 km east of Chennai beyond the 200 m isobath.
 
-**Pixel Scale**
-Nominal SSS pixel resolution: 0.05 m/pixel (assumes a 32 m swath across
-640 px — typical for a 400 kHz hull-mounted SSS at survey altitude ~5 m AGL).
+Pixel scale: 0.05 m/px — nominal for a 400 kHz SSS at ~5 m altitude, 32 m swath,
+640 px across-track resolution.
 
-**Hazard ID Convention**
-Format: AQ-HZ-<NNN>  (e.g. AQ-HZ-001)
-AQ  = AquaScan AI system designator
-HZ  = Hazard classification
-NNN = Zero-padded sequential index per scan
+Hazard ID format: AQ-HZ-NNN (AquaScan system designator, zero-padded per scan).
 """
 
 import json
 import pandas as pd
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
+DEFAULT_BASE_LAT  = 13.0827
+DEFAULT_BASE_LON  = 80.4500
+DEG_PER_PX        = 8e-6     # ~0.05 m/px converted to degrees at survey latitude
+METERS_PER_PX     = 0.05
 
-# Default AUV survey origin — Bay of Bengal offshore (deep water)
-DEFAULT_BASE_LAT = 13.0827   # °N
-DEFAULT_BASE_LON = 80.4500   # °E
-
-# Degrees-per-pixel conversion: 1 pixel ≈ 0.05 m; 1° lat ≈ 111,320 m
-# → 0.05 / 111320 ≈ 4.49e-7 °/px  (using 8e-6 for longitudinal slant correction)
-DEG_PER_PX = 8e-6
-
-# Physical scale: 0.05 m per pixel (SSS survey-grade nominal)
-METERS_PER_PX = 0.05
-
-
-# ---------------------------------------------------------------------------
-# Core geotagging function
-# ---------------------------------------------------------------------------
 
 def parse_sonar_telemetry(
     detections,
-    base_latitude: float = DEFAULT_BASE_LAT,
+    base_latitude:  float = DEFAULT_BASE_LAT,
     base_longitude: float = DEFAULT_BASE_LON,
-    heading: float = 90.0,
-    bbox_dims: list = None
-):
+    heading:        float = 90.0,
+    bbox_dims:      list  = None,
+) -> list:
     """
-    Translate pixel-coordinate detections into geo-referenced hazard records.
+    Convert pixel-space detections to geo-referenced hazard records.
 
     Parameters
     ----------
-    detections    : list[dict]  Each dict must contain:
-                      x_center  (float) — horizontal pixel position
-                      y_center  (float) — vertical pixel position
-                      class_name (str)  — detection class label
-                      confidence (float) — model confidence ∈ [0, 1]
-                      area_px   (float) — bounding-box pixel area
-    base_latitude : float   AUV/sensor origin latitude (°N).
-    base_longitude: float   AUV/sensor origin longitude (°E).
-    heading       : float   AUV heading in degrees (reserved for future
-                            heading-aware coordinate rotation).
-    bbox_dims     : list[tuple(int, int)] | None
-                    Optional list of (width_px, height_px) bounding-box
-                    pixel dimensions, one per detection, in the same order
-                    as `detections`.  When provided, physical dimensions
-                    are computed as:
-                        Estimated_Length_m = height_px × 0.05 m/px
-                        Estimated_Width_m  = width_px  × 0.05 m/px
+    detections     : list[dict]  Each item must contain x_center, y_center,
+                                 class_name, confidence, area_px.
+    base_latitude  : float       AUV origin latitude (°N).
+    base_longitude : float       AUV origin longitude (°E).
+    heading        : float       AUV heading in degrees (reserved for future
+                                 heading-aware coordinate rotation).
+    bbox_dims      : list[(int, int)] | None
+                                 Optional (width_px, height_px) per detection.
+                                 When provided, physical dimensions are computed
+                                 as length = h_px × 0.05 m, width = w_px × 0.05 m.
 
     Returns
     -------
     list[dict]  Structured hazard records ready for CSV / GeoJSON export.
     """
     report = []
-    img_center_px = 320   # assumed 640-px image centre
+    img_center = 320
 
     for idx, det in enumerate(detections):
-        x_center = det.get("x_center", img_center_px)
-        y_center = det.get("y_center", img_center_px)
+        cx = det.get("x_center", img_center)
+        cy = det.get("y_center", img_center)
 
-        # --- Georeferencing ---
-        # Positive y offset → further from nadir track → southward (sonar convention)
-        offset_lat = (y_center - img_center_px) * DEG_PER_PX
-        offset_lon = (x_center - img_center_px) * DEG_PER_PX
+        lat = base_latitude  + (cy - img_center) * DEG_PER_PX
+        lon = base_longitude + (cx - img_center) * DEG_PER_PX
 
-        target_lat = base_latitude  + offset_lat
-        target_lon = base_longitude + offset_lon
-
-        # --- Physical dimensions from bounding box ---
         if bbox_dims and idx < len(bbox_dims):
             w_px, h_px = bbox_dims[idx]
-            est_length_m = round(h_px * METERS_PER_PX, 2)
-            est_width_m  = round(w_px * METERS_PER_PX, 2)
+            length_m = round(h_px * METERS_PER_PX, 2)
+            width_m  = round(w_px * METERS_PER_PX, 2)
         else:
-            # Fallback: approximate square root of pixel area
-            area_px = det.get("area_px", 0)
-            side_px = area_px ** 0.5
-            est_length_m = round(side_px * METERS_PER_PX, 2)
-            est_width_m  = est_length_m
+            side = det.get("area_px", 0) ** 0.5
+            length_m = width_m = round(side * METERS_PER_PX, 2)
 
-        record = {
+        report.append({
             "Hazard ID":           f"AQ-HZ-{idx + 1:03d}",
-            "Classification":      det.get("class_name", "Unknown Hazard"),
+            "Classification":      det.get("class_name", "Unknown"),
             "Confidence_Score":    f"{det.get('confidence', 0.0) * 100:.2f}%",
-            "Latitude":            round(target_lat, 6),
-            "Longitude":           round(target_lon, 6),
-            "Estimated_Length_m":  est_length_m,
-            "Estimated_Width_m":   est_width_m,
-            "Estimated_Area_sq_m": round(det.get("area_px", 100) * METERS_PER_PX ** 2, 2),
+            "Latitude":            round(lat, 6),
+            "Longitude":           round(lon, 6),
+            "Estimated_Length_m":  length_m,
+            "Estimated_Width_m":   width_m,
+            "Estimated_Area_sq_m": round(det.get("area_px", 0) * METERS_PER_PX ** 2, 2),
             "Status":              "Confirmed Anomaly",
-        }
-        report.append(record)
+        })
 
     return report
 
 
-# ---------------------------------------------------------------------------
-# Export helpers
-# ---------------------------------------------------------------------------
-
 def export_reports(
     report_data,
-    output_csv: str  = "data/sonar_hazard_report.csv",
-    output_json: str = "data/sonar_hazard_report.json"
-):
+    output_csv:  str = "data/sonar_hazard_report.csv",
+    output_json: str = "data/sonar_hazard_report.json",
+) -> None:
     """
-    Export structured hazard logs to CSV and GeoJSON formats.
+    Write hazard records to CSV and GeoJSON. Silently skips when report_data is empty
+    to avoid polluting exports with zero-detection placeholder rows.
 
-    If `report_data` is empty, no files are written and a warning is printed —
-    avoids polluting exports with dummy rows when no hazards are detected.
+    Parameters
+    ----------
+    report_data  : list[dict]  Output of parse_sonar_telemetry.
+    output_csv   : str         CSV output path.
+    output_json  : str         GeoJSON FeatureCollection output path.
     """
     if not report_data:
         print("[INFO] No hazards detected — skipping empty export.")
         return
 
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(report_data).to_csv(output_csv, index=False)
 
-    df = pd.DataFrame(report_data)
-    df.to_csv(output_csv, index=False)
-
-    # Build GeoJSON FeatureCollection
-    features = []
-    for rec in report_data:
-        features.append({
+    features = [
+        {
             "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [rec["Longitude"], rec["Latitude"]]
-            },
-            "properties": {k: v for k, v in rec.items()
-                           if k not in ("Latitude", "Longitude")}
-        })
-    geojson = {"type": "FeatureCollection", "features": features}
-
+            "geometry": {"type": "Point", "coordinates": [r["Longitude"], r["Latitude"]]},
+            "properties": {k: v for k, v in r.items() if k not in ("Latitude", "Longitude")},
+        }
+        for r in report_data
+    ]
     with open(output_json, "w") as f:
-        json.dump(geojson, f, indent=4)
+        json.dump({"type": "FeatureCollection", "features": features}, f, indent=4)
 
-    print("=" * 60)
-    print(f"Geotagging Engine — {len(report_data)} hazard(s) exported")
-    print(f"  CSV     : {output_csv}")
-    print(f"  GeoJSON : {output_json}")
-    print("=" * 60)
+    print(f"Exported {len(report_data)} hazard(s) → {output_csv}, {output_json}")
 
-
-# ---------------------------------------------------------------------------
-# Self-test
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    dummy_detections = [
-        {"x_center": 412, "y_center": 280, "class_name": "Shipwreck / Solid Hazard",
+    sample = [
+        {"x_center": 412, "y_center": 280, "class_name": "Submerged Solid Hazard / Shipwreck",
          "confidence": 0.884, "area_px": 1240},
         {"x_center": 150, "y_center": 510, "class_name": "Entangled Ghost Net",
          "confidence": 0.925, "area_px": 3400},
     ]
-    dummy_bbox_dims = [(40, 31), (85, 40)]   # (width_px, height_px) per detection
-
-    data = parse_sonar_telemetry(
-        dummy_detections,
-        base_latitude=DEFAULT_BASE_LAT,
-        base_longitude=DEFAULT_BASE_LON,
-        bbox_dims=dummy_bbox_dims
-    )
-    for rec in data:
-        print(rec)
-    export_reports(data)
+    records = parse_sonar_telemetry(sample, bbox_dims=[(40, 31), (85, 40)])
+    for r in records:
+        print(r)
+    export_reports(records)
