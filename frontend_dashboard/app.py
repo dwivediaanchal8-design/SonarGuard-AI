@@ -215,7 +215,7 @@ with st.sidebar.expander("🛠️ Advanced Acoustic Calibration"):
                            key="iou_thresh_slider")
     enable_clahe = st.checkbox("CLAHE Contrast Equalization", value=True,
                                key="enable_clahe_check")
-    enable_denoise = st.checkbox("Lee & Bilateral Speckle Filter", value=True,
+    enable_denoise = st.checkbox("Lee Speckle Filter (Lee 1980)", value=True,
                                  key="enable_denoise_check")
 
 # Pull stable values from session_state (handles expander-collapsed state)
@@ -226,9 +226,10 @@ enable_denoise = st.session_state.get("enable_denoise_check", True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 AUV Origin Coords")
+# Default: Bay of Bengal offshore (deep water, off Chennai coast)
 base_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.6f",
                                    key="base_lat_input")
-base_lon = st.sidebar.number_input("Longitude (°E)", value=80.270700, format="%.6f",
+base_lon = st.sidebar.number_input("Longitude (°E)", value=80.450000, format="%.6f",
                                    key="base_lon_input")
 
 # ---------------------------------------------------------------------------
@@ -265,6 +266,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Top Mission Telemetry Bar (4 Grid Cards)
+# inference_ms is populated after a scan; idle state shows "—"
+_last_inference_ms = st.session_state.get("last_inference_ms", None)
+_latency_display   = f"{_last_inference_ms} ms" if _last_inference_ms is not None else "— ms"
+_fps_display       = f"{1000.0/_last_inference_ms:.0f} FPS" if _last_inference_ms and _last_inference_ms > 0 else "Run scan"
+
 t1, t2, t3, t4 = st.columns(4)
 
 with t1:
@@ -277,11 +283,11 @@ with t1:
     """, unsafe_allow_html=True)
 
 with t2:
-    st.markdown("""
+    st.markdown(f"""
     <div class="telemetry-card">
         <div class="telemetry-label">Edge Neural Latency</div>
-        <div class="telemetry-val">18 ms</div>
-        <div class="telemetry-sub">⚡ 54 FPS Real-Time</div>
+        <div class="telemetry-val">{_latency_display}</div>
+        <div class="telemetry-sub">⚡ {_fps_display}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -372,6 +378,7 @@ if is_video and input_file_path and os.path.exists(input_file_path):
 
     all_records = []
     frame_idx = 0
+    _cumulative_inference_ms = 0.0
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -381,7 +388,6 @@ if is_video and input_file_path and os.path.exists(input_file_path):
         frame_idx += 1
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Process frame through inference engine
         try:
             res = engine.process_image(
                 image_input=rgb_frame,
@@ -395,6 +401,7 @@ if is_video and input_file_path and os.path.exists(input_file_path):
 
             raw_placeholder.image(res["preprocessed_rgb"], use_container_width=True)
             annotated_placeholder.image(res["annotated_rgb"], use_container_width=True)
+            _cumulative_inference_ms += res.get("inference_ms", 0)
 
             for rec in res["records"]:
                 rec["Frame"] = frame_idx
@@ -407,6 +414,10 @@ if is_video and input_file_path and os.path.exists(input_file_path):
 
     cap.release()
     st.success(f"✅ Video Stream Processing Complete: Analyzed {frame_idx} acoustic ping frames.")
+
+    # Persist mean inference latency to session state for telemetry card
+    if frame_idx > 0:
+        st.session_state["last_inference_ms"] = round(_cumulative_inference_ms / frame_idx, 1)
 
     detected_records = all_records
 
@@ -430,15 +441,18 @@ elif not is_video and image_input is not None:
             result = None
 
     if result is not None:
+        # Persist real measured latency to session state → refreshes telemetry card
+        st.session_state["last_inference_ms"] = result["inference_ms"]
+
         preprocessed_rgb = result["preprocessed_rgb"]
-        annotated_rgb = result["annotated_rgb"]
+        annotated_rgb    = result["annotated_rgb"]
         detected_records = result["records"]
 
         st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>🔍 Sonar Dual-View Inspector</h3>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**1. Preprocessed Sonar Waterfall (Lee Filter + CLAHE)**")
+            st.markdown("**1. Preprocessed Sonar Waterfall (Lee 1980 Speckle Filter + CLAHE)**")
             st.image(preprocessed_rgb, use_container_width=True)
 
         with col2:
@@ -455,28 +469,11 @@ else:
     st.info("👈 Select a pre-loaded Demo Asset from the sidebar or upload your custom file to run inference.")
 
 # -----------------------------------------------------------------------------
-# No-Hazard Fallback — always run after any image/video scan
-# Generates a baseline hydrographic survey log so downloads & map never blank
+# Zero-Detection Clean Banner — NO dummy rows exported
+# If a scan ran but found 0 hazards, show a clean informational status only.
+# CSV / GeoJSON downloads are shown exclusively when real detections exist.
 # -----------------------------------------------------------------------------
 if not detected_records and (is_video or image_input is not None):
-    # Generate 3 baseline AUV swath waypoints as the survey log
-    import datetime
-    baseline_records = []
-    for i, (dlat, dlon) in enumerate([(0.0000, 0.0000), (0.0002, 0.0003), (0.0004, 0.0006)]):
-        baseline_records.append({
-            "Hazard ID":        f"NIOT-SSS-BASE-{i+1:02d}",
-            "Classification":   "Clear Seabed — No Hazard",
-            "Confidence":       "N/A",
-            "Threat Level":     "CLEAR",
-            "Latitude":         round(base_lat + dlat, 6),
-            "Longitude":        round(base_lon + dlon, 6),
-            "Action Protocol":  "Continue Survey",
-            "Timestamp (UTC)": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "lat":              base_lat + dlat,
-            "lon":              base_lon + dlon,
-        })
-    detected_records = baseline_records
-
     st.markdown("""
     <div style="
         background: rgba(16,185,129,0.08);
@@ -493,7 +490,7 @@ if not detected_records and (is_video or image_input is not None):
             </p>
             <p style="margin:2px 0 0; color:#64748b; font-size:12px;">
                 Neural confidence threshold: {conf_thresh:.0%} &nbsp;|
-                Baseline hydrographic survey log generated for AUV swath waypoints.
+                No anomalous objects were detected above threshold — no hazard report generated.
             </p>
         </div>
     </div>
@@ -501,6 +498,7 @@ if not detected_records and (is_video or image_input is not None):
 
 # -----------------------------------------------------------------------------
 # Tactical Hazard Register & Geotagging
+# Only rendered (and downloadable) when real detections are present.
 # -----------------------------------------------------------------------------
 if detected_records:
     st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>📊 Tactical Hazard Register & Geotagging</h3>", unsafe_allow_html=True)
@@ -513,7 +511,7 @@ if detected_records:
         display_df = df_records.drop(columns=["lat", "lon"]) if "lat" in df_records.columns else df_records
         st.dataframe(display_df, use_container_width=True)
 
-        # Create GeoJSON export
+        # Build GeoJSON FeatureCollection — includes physical dimensions
         features = []
         for rec in detected_records:
             lat_val = rec.get("lat", base_lat)
@@ -525,24 +523,31 @@ if detected_records:
                     "coordinates": [lon_val, lat_val]
                 },
                 "properties": {
-                    "Hazard_ID": rec.get("Hazard ID", "SSS_001"),
-                    "Classification": rec.get("Classification", "Anomaly"),
-                    "Confidence": rec.get("Confidence", "85%"),
-                    "Threat_Level": rec.get("Threat Level", "MODERATE"),
-                    "Action_Protocol": rec.get("Action Protocol", "Inspect")
+                    "Hazard_ID":         rec.get("Hazard ID", "AQ-HZ-001"),
+                    "Classification":    rec.get("Classification", "Anomaly"),
+                    "Confidence":        rec.get("Confidence", "N/A"),
+                    "Threat_Level":      rec.get("Threat Level", "MODERATE"),
+                    "Estimated_Length_m": rec.get("Estimated Length (m)", 0.0),
+                    "Estimated_Width_m":  rec.get("Estimated Width (m)", 0.0),
+                    "Action_Protocol":   rec.get("Action Protocol", "Inspect"),
                 }
             }
             features.append(feat)
 
-        csv_data = display_df.to_csv(index=False).encode('utf-8')
-        geojson_data = json.dumps({
-            "type": "FeatureCollection",
-            "features": features
-        }, indent=4).encode('utf-8')
+        csv_data     = display_df.to_csv(index=False).encode("utf-8")
+        geojson_data = json.dumps(
+            {"type": "FeatureCollection", "features": features}, indent=4
+        ).encode("utf-8")
 
         btn_c1, btn_c2 = st.columns(2)
-        btn_c1.download_button("📥 Download Official CSV Log", csv_data, "aqua_scan_hazard_report.csv", "text/csv")
-        btn_c2.download_button("📥 Download Official GeoJSON Report", geojson_data, "aqua_scan_hazards.geojson", "application/json")
+        btn_c1.download_button(
+            "📥 Download Official CSV Log",
+            csv_data, "aqua_scan_hazard_report.csv", "text/csv"
+        )
+        btn_c2.download_button(
+            "📥 Download Official GeoJSON Report",
+            geojson_data, "aqua_scan_hazards.geojson", "application/json"
+        )
 
     with m_col2:
         st.markdown("**Geospatial AUV Swath & Anomaly Map**")
@@ -550,19 +555,36 @@ if detected_records:
             avg_lat = df_records["lat"].mean()
             avg_lon = df_records["lon"].mean()
             
-            m = folium.Map(location=[avg_lat, avg_lon], zoom_start=16, tiles="OpenStreetMap")
+            m = folium.Map(
+                location=[avg_lat, avg_lon],
+                zoom_start=16,
+                tiles="CartoDB dark_matter"
+            )
             
             # Draw AUV Survey Track Line
-            track_points = [[base_lat - 0.001, base_lon - 0.001], [avg_lat, avg_lon], [base_lat + 0.001, base_lon + 0.001]]
-            folium.PolyLine(track_points, color="#00f2fe", weight=3, opacity=0.8, tooltip="AUV Survey Swath Track").add_to(m)
+            track_points = [
+                [base_lat - 0.001, base_lon - 0.001],
+                [avg_lat, avg_lon],
+                [base_lat + 0.001, base_lon + 0.001]
+            ]
+            folium.PolyLine(
+                track_points, color="#00f2fe", weight=3, opacity=0.8,
+                tooltip="AUV Survey Swath Track"
+            ).add_to(m)
 
             for _, row in df_records.iterrows():
-                color_hex = "#ef4444" if row["Threat Level"] == "CRITICAL" else ("#f97316" if row["Threat Level"] == "HIGH" else "#eab308")
+                threat = row.get("Threat Level", "MODERATE")
+                color_hex = (
+                    "#ef4444" if threat == "CRITICAL" else
+                    "#f97316" if threat == "HIGH" else
+                    "#eab308"
+                )
                 popup_html = f"""
                 <div style="font-family:sans-serif; font-size:12px; color:#0f172a;">
-                    <b>ID:</b> {row.get('Hazard ID', 'SSS')}<br>
+                    <b>ID:</b> {row.get('Hazard ID', 'AQ-HZ')}<br>
                     <b>Class:</b> {row.get('Classification', 'Hazard')}<br>
-                    <b>Conf:</b> {row.get('Confidence', '85%')}<br>
+                    <b>Conf:</b> {row.get('Confidence', 'N/A')}<br>
+                    <b>L×W:</b> {row.get('Estimated Length (m)', '—')} m × {row.get('Estimated Width (m)', '—')} m<br>
                     <b>Action:</b> {row.get('Action Protocol', 'Inspect')}
                 </div>
                 """
@@ -573,7 +595,7 @@ if detected_records:
                     fill=True,
                     fill_color=color_hex,
                     fill_opacity=0.75,
-                    popup=folium.Popup(popup_html, max_width=220)
+                    popup=folium.Popup(popup_html, max_width=240)
                 ).add_to(m)
             
             st_folium(m, height=290, width=None, use_container_width=True)
