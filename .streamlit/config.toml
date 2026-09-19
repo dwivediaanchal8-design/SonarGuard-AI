@@ -1,0 +1,32 @@
+[server]
+# Streamlit Cloud headless operation — prevents browser auto-launch and
+# avoids the interactive "Would you like to receive usage statistics" prompt
+# that can hang non-TTY containers indefinitely.
+headless = true
+port = 8501
+enableCORS = false
+enableXsrfProtection = true
+
+# Limit upload size to 50 MB — prevents container OOM on large sonar video uploads
+maxUploadSize = 50
+
+[browser]
+# Disable Streamlit's usage stats collection prompt on cold-start
+gatherUsageStats = false
+
+[runner]
+# Disable magic commands — avoids Streamlit scanning every line for display calls
+# (performance improvement on large modules)
+magicEnabled = false
+
+# Only watch the app source file — do NOT watch data/ or models/ directories
+# which can contain GB-scale datasets that trigger inotify saturation on Linux
+fastReruns = true
+
+[theme]
+base = "dark"
+primaryColor = "#00f2fe"
+backgroundColor = "#070d18"
+secondaryBackgroundColor = "#0b1326"
+textColor = "#f8fafc"
+font = "sans serif"

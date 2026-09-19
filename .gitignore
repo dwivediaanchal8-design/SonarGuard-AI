@@ -48,8 +48,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Streamlit / IDE
-.streamlit/
+# Streamlit / IDE — track config.toml but never commit secrets
+.streamlit/secrets.toml
 .vscode/
 .idea/
 

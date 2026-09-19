@@ -1,21 +1,22 @@
 """
-Preprocessing Module for Underwater Sonar AI
-Contains acoustic noise reduction, sliding-window tiling, synthetic debris generation, and dataset management utilities.
+Preprocessing Module — Inference-Time API
+==========================================
+Exposes only the two functions required at serving/inference time.
+
+Training utilities (dataset_prep, debris_generator, tiling) are intentionally
+NOT imported here to avoid loading `requests`, `zipfile`, and other heavy
+training dependencies on every app boot.  Import those modules directly
+when needed during training/dataset preparation workflows:
+
+    # In training scripts only:
+    from preprocessing.dataset_prep import prepare_full_sonar
+    from preprocessing.debris_generator import inject_debris
+    from preprocessing.tiling import generate_tiles
 """
 
 from .denoise import preprocess_sonar_image, apply_clahe_filter
-from .tiling import generate_tiles
-from .debris_generator import inject_debris, generate_multiclass_debris_dataset
-from .dataset_prep import split_data, validate_split, prepare_full_sonar, fetch_debris_dataset
 
 __all__ = [
     "preprocess_sonar_image",
     "apply_clahe_filter",
-    "generate_tiles",
-    "inject_debris",
-    "generate_multiclass_debris_dataset",
-    "split_data",
-    "validate_split",
-    "prepare_full_sonar",
-    "fetch_debris_dataset"
 ]
