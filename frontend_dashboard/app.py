@@ -1,605 +1,1087 @@
 import os
 import sys
+import glob
 import json
-import tempfile
-import numpy as np
-import pandas as pd
-from PIL import Image
+import time
+from datetime import datetime, timezone
+
 import streamlit as st
-from pathlib import Path
+import cv2
+import numpy as np
+from PIL import Image
+import pandas as pd
+from ultralytics import YOLO
 
-# ---------------------------------------------------------------------------
-# Dynamic Root Resolution
-# On Streamlit Community Cloud, the repo is mounted at /mount/src/<repo>/
-# On local dev, __file__ is inside frontend_dashboard/.
-# Anchoring to __file__ guarantees correct resolution in every environment.
-# ---------------------------------------------------------------------------
-_THIS_DIR = Path(__file__).resolve().parent            # frontend_dashboard/
-ROOT_DIR  = _THIS_DIR.parent                           # workspace root
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
 
-from backend_api.inference import SonarInferenceEngine
+from core_engine.geotag_engine import parse_sonar_telemetry
+from preprocessing.denoise import preprocess_sonar as denoise_preprocess
 
-# Try importing folium and streamlit_folium safely
 try:
     import folium
     from streamlit_folium import st_folium
-    HAS_FOLIUM = True
+    FOLIUM_OK = True
 except ImportError:
-    HAS_FOLIUM = False
+    FOLIUM_OK = False
 
-# ---------------------------------------------------------------------------
-# Safe cv2 import — opencv-python-headless is required on cloud servers
-# ---------------------------------------------------------------------------
-try:
-    import cv2
-except ImportError as _cv2_err:
-    st.error(
-        "❌ **OpenCV is not installed.** "
-        "Ensure `opencv-python-headless` is listed in `requirements.txt` and redeploy.\n\n"
-        f"Detail: {_cv2_err}"
-    )
-    st.stop()
-
-# -----------------------------------------------------------------------------
-# Page Configuration & Deep Oceanic Onyx Theme
-# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="AquaScan AI | Team DeepTrace",
+    page_title="AquaScan AI | SIH-2026 NIOT Marine Survey",
     page_icon="🌊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Deep Oceanic Onyx CSS Styling (#070d18 / #0b1326 palette with Marine Cyan & Emerald)
-st.markdown("""
+_CSS = """
 <style>
-    /* Dark Oceanic Onyx Theme Globals */
-    .stApp {
-        background-color: #070d18;
-        color: #f8fafc;
-        font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    }
-    
-    /* Header Banner */
-    .command-header {
-        background: linear-gradient(135deg, rgba(11, 19, 38, 0.95) 0%, rgba(7, 13, 24, 0.9) 100%);
-        border: 1px solid rgba(0, 242, 254, 0.25);
-        border-radius: 12px;
-        padding: 22px 28px;
-        margin-bottom: 22px;
-        box-shadow: 0 10px 30px -10px rgba(0, 242, 254, 0.15);
-    }
-    .command-title {
-        color: #00f2fe;
-        font-size: 30px;
-        font-weight: 800;
-        letter-spacing: 0.8px;
-        margin: 0;
-        text-transform: uppercase;
-        background: linear-gradient(90deg, #00f2fe 0%, #38bdf8 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .command-subtitle {
-        color: #94a3b8;
-        font-size: 14px;
-        margin-top: 6px;
-        margin-bottom: 0;
-        font-weight: 500;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap');
 
-    .badge-sih {
-        background: rgba(16, 185, 129, 0.15);
-        color: #10b981;
-        border: 1px solid rgba(16, 185, 129, 0.4);
-        border-radius: 20px;
-        padding: 6px 14px;
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        display: inline-block;
-        box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
-    }
-
-    /* Auto-Calibrated Threshold Indicator Card */
-    .calib-card {
-        background: rgba(11, 19, 38, 0.7);
-        border: 1px solid rgba(0, 242, 254, 0.2);
-        border-radius: 8px;
-        padding: 10px 14px;
-        margin-bottom: 15px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-    }
-    .calib-text {
-        font-size: 12px;
-        color: #00f2fe;
-        font-weight: 600;
-    }
-    
-    /* Telemetry Cards */
-    .telemetry-card {
-        background: rgba(11, 19, 38, 0.75);
-        backdrop-filter: blur(14px);
-        border: 1px solid rgba(0, 242, 254, 0.15);
-        border-radius: 12px;
-        padding: 16px 20px;
-        text-align: center;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-    .telemetry-card:hover {
-        border-color: rgba(0, 242, 254, 0.4);
-        transform: translateY(-2px);
-    }
-    .telemetry-label {
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: #64748b;
-        font-weight: 600;
-    }
-    .telemetry-val {
-        font-size: 24px;
-        font-weight: 800;
-        color: #00f2fe;
-        margin-top: 4px;
-    }
-    .telemetry-sub {
-        font-size: 11px;
-        color: #10b981;
-        margin-top: 2px;
-        font-weight: 500;
-    }
-
-    /* Threat Color Chips */
-    .threat-critical { color: #ef4444; font-weight: 700; }
-    .threat-high { color: #f97316; font-weight: 700; }
-    .threat-moderate { color: #eab308; font-weight: 700; }
-
-    /* Hide standard Streamlit header clutter */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# Model Initialization
-# -----------------------------------------------------------------------------
-@st.cache_resource(show_spinner="⚙️ Loading AquaScan neural weights...")
-def load_inference_engine():
-    """
-    Singleton model loader — called exactly once per Streamlit server lifecycle.
-    @st.cache_resource ensures YOLO weights are never re-instantiated on rerenders.
-    """
-    return SonarInferenceEngine()
-
-try:
-    engine = load_inference_engine()
-except Exception as e:
-    st.error(f"❌ Critical Failure: Unable to load Sonar Inference Engine weights: {e}")
-    st.stop()
-
-# -----------------------------------------------------------------------------
-# Demo Asset Pre-loading — @st.cache_data so disk I/O happens once per session
-# -----------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def load_demo_image(image_path: str):
-    """Load and cache a demo image from disk. Prevents repeated disk reads on rerenders."""
-    if os.path.exists(image_path):
-        return Image.open(image_path).convert("RGB")
-    return None
-
-# -----------------------------------------------------------------------------
-# Sidebar Controls & Auto-Calibrated Thresholds
-# -----------------------------------------------------------------------------
-st.sidebar.markdown("<h2 style='color:#00f2fe; font-size:20px; font-weight:700;'>🌊 AquaScan Control</h2>", unsafe_allow_html=True)
-
-# Auto-tuned Calibration Status Indicator
-st.sidebar.markdown("""
-<div class="calib-card">
-    <span class="calib-text">⚡ Auto-Calibrated Threshold</span>
-    <span style="color:#10b981; font-weight:700; font-size:13px;">40% Optimal</span>
-</div>
-""", unsafe_allow_html=True)
-
-# Advanced Manual Calibration inside collapsible expander (clean UI)
-# All widgets use unique st.session_state keys — prevents widget resets on rerenders
-with st.sidebar.expander("🛠️ Advanced Acoustic Calibration"):
-    conf_thresh = st.slider("Confidence Cutoff", 0.10, 1.00, 0.35, 0.05,
-                            key="conf_thresh_slider")
-    iou_thresh = st.slider("NMS IoU Threshold", 0.10, 0.90, 0.45, 0.05,
-                           key="iou_thresh_slider")
-    enable_clahe = st.checkbox("CLAHE Contrast Equalization", value=True,
-                               key="enable_clahe_check")
-    enable_denoise = st.checkbox("Lee Speckle Filter (Lee 1980)", value=True,
-                                 key="enable_denoise_check")
-
-# Pull stable values from session_state (handles expander-collapsed state)
-conf_thresh    = st.session_state.get("conf_thresh_slider", 0.35)
-iou_thresh     = st.session_state.get("iou_thresh_slider", 0.45)
-enable_clahe   = st.session_state.get("enable_clahe_check", True)
-enable_denoise = st.session_state.get("enable_denoise_check", True)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("📍 AUV Origin Coords")
-# Default: Bay of Bengal offshore (deep water, off Chennai coast)
-base_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.6f",
-                                   key="base_lat_input")
-base_lon = st.sidebar.number_input("Longitude (°E)", value=80.450000, format="%.6f",
-                                   key="base_lon_input")
-
-# ---------------------------------------------------------------------------
-# Demo Test Assets — resolved against ROOT_DIR so they work on any host
-# ---------------------------------------------------------------------------
-_DEMO_DIR = ROOT_DIR / "demo_test_assets"
-demo_assets = {
-    "[Demo Image 1] Shipwreck Anomaly Scan":                   str(_DEMO_DIR / "test_shipwreck.png"),
-    "[Demo Image 2] Subsea Pipeline Infrastructure":           str(_DEMO_DIR / "test_subsea_pipeline.png"),
-    "[Demo Video Stream] Live AUV Sonar Stream (.mp4)":        str(_DEMO_DIR / "test_sonar_stream.mp4"),
-    "Upload Custom File (PNG/JPG or MP4)":                     None,
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif !important;
 }
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("📁 Input Test Asset")
-selected_asset_key = st.sidebar.selectbox("Select Sonar Input Source", list(demo_assets.keys()),
-                                          key="asset_selector")
+.stApp {
+    background: #020817 !important;
+    color: #e2e8f0 !important;
+}
 
-# -----------------------------------------------------------------------------
-# Top Branding & Identity Banner
-# -----------------------------------------------------------------------------
-st.markdown("""
-<div class="command-header">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <div>
-            <h1 class="command-title">AquaScan AI</h1>
-            <p class="command-subtitle">Autonomous Underwater Marine Debris & Sonar Anomaly Detection System</p>
-        </div>
-        <div>
-            <span class="badge-sih">Team DeepTrace | SIH 2026</span>
-        </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+header[data-testid="stHeader"] {
+    background: transparent !important;
+    height: 0 !important;
+}
 
-# Top Mission Telemetry Bar (4 Grid Cards)
-# inference_ms is populated after a scan; idle state shows "—"
-_last_inference_ms = st.session_state.get("last_inference_ms", None)
-_latency_display   = f"{_last_inference_ms} ms" if _last_inference_ms is not None else "— ms"
-_fps_display       = f"{1000.0/_last_inference_ms:.0f} FPS" if _last_inference_ms and _last_inference_ms > 0 else "Run scan"
+section[data-testid="stSidebar"] {
+    background: #f8fafc !important;
+    border-right: 2px solid #dde3ed !important;
+}
 
-t1, t2, t3, t4 = st.columns(4)
+section[data-testid="stSidebar"] * {
+    color: #0f172a !important;
+}
 
-with t1:
-    st.markdown("""
-    <div class="telemetry-card">
-        <div class="telemetry-label">AUV Acoustic Link</div>
-        <div class="telemetry-val">15 Hz</div>
-        <div class="telemetry-sub">🟢 Live Swath Ping</div>
-    </div>
-    """, unsafe_allow_html=True)
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3 {
+    color: #0f172a !important;
+}
 
-with t2:
-    st.markdown(f"""
-    <div class="telemetry-card">
-        <div class="telemetry-label">Edge Neural Latency</div>
-        <div class="telemetry-val">{_latency_display}</div>
-        <div class="telemetry-sub">⚡ {_fps_display}</div>
-    </div>
-    """, unsafe_allow_html=True)
+section[data-testid="stSidebar"] label {
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    color: #334155 !important;
+    letter-spacing: 0.03em !important;
+}
 
-with t3:
-    st.markdown("""
-    <div class="telemetry-card">
-        <div class="telemetry-label">False Positive Rejection</div>
-        <div class="telemetry-val">94.2%</div>
-        <div class="telemetry-sub">🛡️ Lee Filter Calibrated</div>
-    </div>
-    """, unsafe_allow_html=True)
+section[data-testid="stSidebar"] .stSelectbox > div,
+section[data-testid="stSidebar"] .stSelectbox > div > div,
+section[data-testid="stSidebar"] .stSelectbox > div > div > div,
+section[data-testid="stSidebar"] .stFileUploader > div,
+section[data-testid="stSidebar"] .stNumberInput > div,
+section[data-testid="stSidebar"] .stNumberInput > div > div {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+}
 
-with t4:
-    st.markdown("""
-    <div class="telemetry-card">
-        <div class="telemetry-label">Seabed Area Mapped</div>
-        <div class="telemetry-val">1.42 km²</div>
-        <div class="telemetry-sub">🗺️ Hydrographic Survey</div>
-    </div>
-    """, unsafe_allow_html=True)
+section[data-testid="stSidebar"] .stSelectbox > div > div > div > div,
+section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] span,
+section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] div {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
 
-st.markdown("<br>", unsafe_allow_html=True)
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] input[type="number"],
+section[data-testid="stSidebar"] input[type="text"] {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    -webkit-text-fill-color: #0f172a !important;
+}
 
-# -----------------------------------------------------------------------------
-# Input Asset Ingestion & Video Stream Processing
-# (Wrapped in defensive try-except so corrupt uploads show a friendly alert)
-# -----------------------------------------------------------------------------
-input_file_path = None
-is_video = False
-uploaded_file = None
-image_input = None  # Always initialize to avoid NameError in branching paths
+section[data-testid="stSidebar"] [data-baseweb="popover"] li,
+section[data-testid="stSidebar"] [data-baseweb="popover"] ul {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+}
 
-if selected_asset_key == "Upload Custom File (PNG/JPG or MP4)":
-    uploaded_file = st.file_uploader(
-        "Upload Sonar Scan Image (.png, .jpg) or AUV Stream Video (.mp4)",
-        type=["png", "jpg", "jpeg", "mp4"],
-        key="file_uploader"
-    )
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.lower().endswith(".mp4"):
-                is_video = True
-                tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-                tfile.write(uploaded_file.read())
-                tfile.flush()
-                input_file_path = tfile.name
-            else:
-                is_video = False
-                image_input = Image.open(uploaded_file).convert("RGB")
-        except Exception as upload_err:
-            st.error(
-                f"⚠️ **Could not process the uploaded file** — it may be corrupted or in an unsupported format.\n\n"
-                f"Detail: `{upload_err}`"
-            )
-            image_input = None
-            input_file_path = None
-else:
-    target_path = demo_assets[selected_asset_key]
-    if target_path and os.path.exists(target_path):
-        if target_path.lower().endswith(".mp4"):
-            is_video = True
-            input_file_path = target_path
-        else:
-            is_video = False
-            # Cached loader — avoids disk I/O on every rerender
-            image_input = load_demo_image(target_path)
+section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
+    background-color: #e0f2fe !important;
+}
 
-# -----------------------------------------------------------------------------
-# Processing Pipeline Execution
-# -----------------------------------------------------------------------------
-if is_video and input_file_path and os.path.exists(input_file_path):
-    st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>🎥 Live AUV Video Stream Inspector</h3>", unsafe_allow_html=True)
-    
-    cap = cv2.VideoCapture(input_file_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 30
+.block-container {
+    padding: 1rem 1.8rem 2rem 1.8rem !important;
+    max-width: 100% !important;
+}
 
-    col_vid1, col_vid2 = st.columns(2)
-    with col_vid1:
-        st.markdown("**1. Raw Sonar Waterfall Video Feed**")
-        raw_placeholder = st.empty()
-    with col_vid2:
-        st.markdown("**2. Real-Time Neural Anomaly Overlay**")
-        annotated_placeholder = st.empty()
+.aq-navbar {
+    background: linear-gradient(120deg, #020c1e 0%, #0a1f3d 45%, #051b38 100%);
+    border: 1px solid rgba(0, 212, 255, 0.15);
+    border-radius: 16px;
+    padding: 20px 32px;
+    margin-bottom: 20px;
+    box-shadow: 0 0 40px rgba(0, 212, 255, 0.08), inset 0 1px 0 rgba(255,255,255,0.05);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+}
 
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+.aq-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
 
-    all_records = []
-    frame_idx = 0
-    _cumulative_inference_ms = 0.0
+.aq-title {
+    font-size: 26px;
+    font-weight: 900;
+    color: #f0f9ff;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    line-height: 1;
+    text-shadow: 0 0 30px rgba(0,212,255,0.4);
+}
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-            
-        frame_idx += 1
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        try:
-            res = engine.process_image(
-                image_input=rgb_frame,
-                conf_thresh=conf_thresh,
-                iou_thresh=iou_thresh,
-                enable_clahe=enable_clahe,
-                enable_denoise=enable_denoise,
-                base_lat=base_lat + (frame_idx * 0.00001),
-                base_lon=base_lon + (frame_idx * 0.00001)
-            )
+.aq-subtitle {
+    font-size: 12px;
+    color: #64a8cc;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+}
 
-            raw_placeholder.image(res["preprocessed_rgb"], use_container_width=True)
-            annotated_placeholder.image(res["annotated_rgb"], use_container_width=True)
-            _cumulative_inference_ms += res.get("inference_ms", 0)
+.aq-badges {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+}
 
-            for rec in res["records"]:
-                rec["Frame"] = frame_idx
-                all_records.append(rec)
-        except Exception as frame_err:
-            status_text.warning(f"⚠️ Skipped frame {frame_idx}: {frame_err}")
+.aq-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(0, 212, 255, 0.06);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    border-radius: 10px;
+    padding: 8px 16px;
+    min-width: 88px;
+    backdrop-filter: blur(4px);
+}
 
-        progress_bar.progress(min(1.0, frame_idx / float(total_frames)))
-        status_text.text(f"Processing AUV Ping Frame {frame_idx}/{total_frames} | Stream FPS: {fps:.1f}")
+.aq-badge-val {
+    font-size: 18px;
+    font-weight: 800;
+    color: #00d4ff;
+    line-height: 1.1;
+}
 
-    cap.release()
-    st.success(f"✅ Video Stream Processing Complete: Analyzed {frame_idx} acoustic ping frames.")
+.aq-badge-lbl {
+    font-size: 10px;
+    color: #7ecfe8;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    margin-top: 3px;
+}
 
-    # Persist mean inference latency to session state for telemetry card
-    if frame_idx > 0:
-        st.session_state["last_inference_ms"] = round(_cumulative_inference_ms / frame_idx, 1)
+.aq-online {
+    background: linear-gradient(135deg, #022c1e, #064e3b);
+    color: #6ee7b7;
+    border: 1px solid #34d399;
+    border-radius: 20px;
+    padding: 8px 18px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    box-shadow: 0 0 16px rgba(52, 211, 153, 0.2);
+}
 
-    detected_records = all_records
+.aq-panel {
+    background: linear-gradient(145deg, #0b1a30 0%, #0d1f38 100%);
+    border: 1px solid rgba(0,212,255,0.12);
+    border-radius: 14px;
+    padding: 18px 20px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03);
+    margin-bottom: 18px;
+}
 
-elif not is_video and image_input is not None:
-    with st.spinner("Processing acoustic scan through neural pipeline & hydrographic engine..."):
-        try:
-            result = engine.process_image(
-                image_input=image_input,
-                conf_thresh=conf_thresh,
-                iou_thresh=iou_thresh,
-                enable_clahe=enable_clahe,
-                enable_denoise=enable_denoise,
-                base_lat=base_lat,
-                base_lon=base_lon
-            )
-        except Exception as img_err:
-            st.error(
-                f"⚠️ **Inference failed on this image.** The file may be corrupted or in an unsupported format.\n\n"
-                f"Detail: `{img_err}`"
-            )
-            result = None
+.aq-panel-hdr {
+    font-size: 12px;
+    font-weight: 800;
+    color: #7ecfe8;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(0,212,255,0.15);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
 
-    if result is not None:
-        # Persist real measured latency to session state → refreshes telemetry card
-        st.session_state["last_inference_ms"] = result["inference_ms"]
+.aq-col-label {
+    font-size: 11px;
+    font-weight: 800;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 6px;
+    display: inline-block;
+}
 
-        preprocessed_rgb = result["preprocessed_rgb"]
-        annotated_rgb    = result["annotated_rgb"]
-        detected_records = result["records"]
+.stat-strip {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
 
-        st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>🔍 Sonar Dual-View Inspector</h3>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
+.stat-tile {
+    flex: 1;
+    min-width: 110px;
+    background: linear-gradient(145deg, #0b1a30, #0d2040);
+    border: 1px solid rgba(0,212,255,0.12);
+    border-radius: 12px;
+    padding: 14px 16px;
+    text-align: center;
+}
 
-        with col1:
-            st.markdown("**1. Preprocessed Sonar Waterfall (Lee 1980 Speckle Filter + CLAHE)**")
-            st.image(preprocessed_rgb, use_container_width=True)
+.stat-val {
+    font-size: 28px;
+    font-weight: 900;
+    color: #00d4ff;
+    line-height: 1;
+}
 
-        with col2:
-            st.markdown("**2. Real-Time Detection & Tactical Anomaly Overlay**")
-            st.image(annotated_rgb, use_container_width=True)
+.stat-lbl {
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-top: 4px;
+}
 
-        st.markdown("---")
-    else:
-        detected_records = []
+.idle-box {
+    background: linear-gradient(145deg, #0b1a30, #0a1628);
+    border: 1px solid rgba(0,212,255,0.12);
+    border-radius: 14px;
+    padding: 56px 32px;
+    text-align: center;
+}
 
-else:
-    # No input selected yet — show idle prompt and stop here
-    detected_records = []
-    st.info("👈 Select a pre-loaded Demo Asset from the sidebar or upload your custom file to run inference.")
+.idle-icon {
+    font-size: 52px;
+    margin-bottom: 14px;
+}
 
-# -----------------------------------------------------------------------------
-# Zero-Detection Clean Banner — NO dummy rows exported
-# If a scan ran but found 0 hazards, show a clean informational status only.
-# CSV / GeoJSON downloads are shown exclusively when real detections exist.
-# -----------------------------------------------------------------------------
-if not detected_records and (is_video or image_input is not None):
-    st.markdown("""
-    <div style="
-        background: rgba(16,185,129,0.08);
-        border: 1px solid rgba(16,185,129,0.4);
-        border-radius: 10px;
-        padding: 14px 20px;
-        margin-bottom: 18px;
-        display:flex; align-items:center; gap:12px;
-    ">
-        <span style="font-size:24px;">✅</span>
-        <div>
-            <p style="margin:0; color:#10b981; font-weight:700; font-size:15px;">
-                Seabed Clear — No Hazards Detected in Swath
-            </p>
-            <p style="margin:2px 0 0; color:#64748b; font-size:12px;">
-                Neural confidence threshold: {conf_thresh:.0%} &nbsp;|
-                No anomalous objects were detected above threshold — no hazard report generated.
-            </p>
-        </div>
-    </div>
-    """.format(conf_thresh=conf_thresh), unsafe_allow_html=True)
+.idle-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #e0f2fe;
+    margin-bottom: 8px;
+}
 
-# -----------------------------------------------------------------------------
-# Tactical Hazard Register & Geotagging
-# Only rendered (and downloadable) when real detections are present.
-# -----------------------------------------------------------------------------
-if detected_records:
-    st.markdown("<h3 style='color:#00f2fe; font-size:18px;'>📊 Tactical Hazard Register & Geotagging</h3>", unsafe_allow_html=True)
-    df_records = pd.DataFrame(detected_records)
-    
-    m_col1, m_col2 = st.columns([3, 2])
-    
-    with m_col1:
-        st.markdown("**Detected Hazards Summary**")
-        display_df = df_records.drop(columns=["lat", "lon"]) if "lat" in df_records.columns else df_records
-        st.dataframe(display_df, use_container_width=True)
+.idle-body {
+    font-size: 13px;
+    color: #64a8cc;
+    line-height: 1.7;
+    max-width: 420px;
+    margin: 0 auto;
+}
 
-        # Build GeoJSON FeatureCollection — includes physical dimensions
-        features = []
-        for rec in detected_records:
-            lat_val = rec.get("lat", base_lat)
-            lon_val = rec.get("lon", base_lon)
-            feat = {
+.sb-section {
+    font-size: 11px;
+    font-weight: 800;
+    color: #475569;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin: 16px 0 6px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.threat-pill-CRITICAL {
+    display: inline-block;
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1.5px solid #fca5a5;
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.threat-pill-HIGH {
+    display: inline-block;
+    background: #ffedd5;
+    color: #9a3412;
+    border: 1.5px solid #fdba74;
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.threat-pill-MODERATE {
+    display: inline-block;
+    background: #fef9c3;
+    color: #854d0e;
+    border: 1.5px solid #fde047;
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+div[data-testid="stDataFrame"] {
+    border-radius: 10px !important;
+}
+
+.footer-bar {
+    margin-top: 32px;
+    padding: 14px 20px;
+    background: rgba(11,26,48,0.8);
+    border-top: 1px solid rgba(0,212,255,0.1);
+    border-radius: 10px;
+    text-align: center;
+    font-size: 11px;
+    color: #475569;
+    letter-spacing: 0.05em;
+}
+</style>
+"""
+
+st.markdown(_CSS, unsafe_allow_html=True)
+
+DETECTION_META = {
+    0: {
+        "name": "Shipwreck / Solid Hazard",
+        "short": "WRECK",
+        "threat": "HIGH",
+        "cbgr": (0, 145, 255),
+        "nbgr": (0, 145, 255),
+        "mc": "#ff9100",
+        "depth_m": 42.5,
+    },
+    1: {
+        "name": "Ghost Fishing Net",
+        "short": "GHOST-NET",
+        "threat": "CRITICAL",
+        "cbgr": (68, 23, 255),
+        "nbgr": (68, 23, 255),
+        "mc": "#ff1744",
+        "depth_m": 18.2,
+    },
+    2: {
+        "name": "Submerged Pipe / Cable",
+        "short": "PIPE/CABLE",
+        "threat": "MODERATE",
+        "cbgr": (255, 229, 0),
+        "nbgr": (255, 229, 0),
+        "mc": "#00e5ff",
+        "depth_m": 61.0,
+    },
+}
+
+THREAT_ORDER = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2}
+THREAT_BG = {"CRITICAL": "#fee2e2", "HIGH": "#ffedd5", "MODERATE": "#fef9c3"}
+THREAT_FC = {"CRITICAL": "#991b1b", "HIGH": "#9a3412", "MODERATE": "#854d0e"}
+
+
+def locate_weights():
+    sdir = os.path.dirname(os.path.abspath(__file__))
+    for base in list({os.getcwd(), sdir, ROOT_DIR}):
+        hits = glob.glob(os.path.join(base, "**", "best.pt"), recursive=True)
+        if hits:
+            return os.path.abspath(hits[0])
+    return "yolov8n.pt"
+
+
+def _pick_first(patterns):
+    for pat in patterns:
+        hits = glob.glob(pat, recursive=True)
+        if hits:
+            return os.path.abspath(hits[0])
+    return None
+
+
+def build_demo_registry():
+    r = ROOT_DIR
+    shipwreck = _pick_first([
+        os.path.join(r, "demo_test_assets", "test_shipwreck.png"),
+        os.path.join(r, "data", "AI4Shipwrecks", "extras", "terrain", "images", "Exploratory_A_01.png"),
+        os.path.join(r, "data", "AI4Shipwrecks", "train", "images", "*.png"),
+    ])
+    ghost_net = _pick_first([
+        os.path.join(r, "data", "AI4Shipwrecks", "train", "images", "DM_Wilson_01.png"),
+        os.path.join(r, "data", "multi_debris_dataset", "images", "train", "DM_Wilson_03_tile_0.png"),
+        os.path.join(r, "data", "multi_debris_dataset", "images", "train", "*.png"),
+    ])
+    pipe_cable = _pick_first([
+        os.path.join(r, "demo_test_assets", "test_subsea_pipeline.png"),
+        os.path.join(r, "data", "full_sonar_dataset", "images", "train", "DM_Wilson_01.png"),
+        os.path.join(r, "data", "full_sonar_dataset", "images", "train", "*.png"),
+    ])
+    video = _pick_first([
+        os.path.join(r, "demo_test_assets", "test_sonar_stream.mp4"),
+        os.path.join(r, "**", "sonar_mission_feed.mp4"),
+        os.path.join(r, "**", "*.mp4"),
+    ])
+    return {
+        "shipwreck": shipwreck,
+        "ghost_net": ghost_net,
+        "pipe_cable": pipe_cable,
+        "video": video,
+    }
+
+
+DEMO = build_demo_registry()
+WEIGHTS_PATH = locate_weights()
+
+
+@st.cache_resource(show_spinner="Initialising YOLOv8 acoustic detector...")
+def load_model(wp):
+    return YOLO(wp)
+
+
+detector = load_model(WEIGHTS_PATH)
+
+
+def preprocess_full(img_bgr, use_clahe, use_lee, use_bilateral, bilateral_sigma):
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY) if len(img_bgr.shape) == 3 else img_bgr.copy()
+    out = gray.copy()
+    if use_bilateral:
+        out = cv2.bilateralFilter(out, d=5, sigmaColor=int(bilateral_sigma), sigmaSpace=int(bilateral_sigma))
+    if use_lee:
+        out = denoise_preprocess(cv2.cvtColor(out, cv2.COLOR_GRAY2BGR), clahe=False, denoise=True)
+        out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    if use_clahe:
+        clahe_obj = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        out = clahe_obj.apply(out)
+    return cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+
+
+def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
+    cv2.rectangle(img, (x1 - 3, y1 - 3), (x2 + 3, y2 + 3), (0, 0, 0), 5)
+    cv2.rectangle(img, (x1, y1), (x2, y2), nbgr, 3)
+
+    cl = max(14, (x2 - x1) // 5)
+    for ax, ay, hx, hy, vx, vy in [
+        (x1, y1, x1 + cl, y1, x1, y1 + cl),
+        (x2, y1, x2 - cl, y1, x2, y1 + cl),
+        (x1, y2, x1 + cl, y2, x1, y2 - cl),
+        (x2, y2, x2 - cl, y2, x2, y2 - cl),
+    ]:
+        cv2.line(img, (ax, ay), (hx, hy), cbgr, 3)
+        cv2.line(img, (ax, ay), (vx, vy), cbgr, 3)
+
+    top_line = f"{class_text}"
+    bot_line = f"Conf: {conf_text}"
+    font = cv2.FONT_HERSHEY_DUPLEX
+    fs = max(0.42, min(0.68, (x2 - x1) / 300))
+    (tw1, th1), _ = cv2.getTextSize(top_line, font, fs, 1)
+    (tw2, th2), _ = cv2.getTextSize(bot_line, font, fs * 0.88, 1)
+    pad_x, pad_y = 10, 6
+    pill_w = max(tw1, tw2) + pad_x * 2
+    pill_h = th1 + th2 + pad_y * 3
+    px1 = x1
+    py1 = max(0, y1 - pill_h - 6)
+    px2 = px1 + pill_w
+    py2 = py1 + pill_h
+
+    overlay = img.copy()
+    cv2.rectangle(overlay, (px1, py1), (px2, py2), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.88, img, 0.12, 0, img)
+    cv2.rectangle(img, (px1, py1), (px2, py2), nbgr, 2)
+    cv2.putText(img, top_line, (px1 + pad_x, py1 + pad_y + th1),
+                font, fs, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(img, bot_line, (px1 + pad_x, py1 + pad_y + th1 + pad_y + th2),
+                font, fs * 0.88, (200, 230, 255), 1, cv2.LINE_AA)
+
+
+def mk_geojson(records):
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
                 "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [lon_val, lat_val]
-                },
+                "geometry": {"type": "Point", "coordinates": [r["Longitude"], r["Latitude"]]},
                 "properties": {
-                    "Hazard_ID":         rec.get("Hazard ID", "AQ-HZ-001"),
-                    "Classification":    rec.get("Classification", "Anomaly"),
-                    "Confidence":        rec.get("Confidence", "N/A"),
-                    "Threat_Level":      rec.get("Threat Level", "MODERATE"),
-                    "Estimated_Length_m": rec.get("Estimated Length (m)", 0.0),
-                    "Estimated_Width_m":  rec.get("Estimated Width (m)", 0.0),
-                    "Action_Protocol":   rec.get("Action Protocol", "Inspect"),
-                }
+                    "hazard_id": r["Hazard ID"],
+                    "classification": r["Classification"],
+                    "confidence": str(r.get("Confidence_Score", "")),
+                    "threat_level": r.get("threat_level", "MODERATE"),
+                    "depth_m": r.get("Depth_m", 0),
+                    "length_m": r.get("Estimated_Length_m", 0),
+                    "width_m": r.get("Estimated_Width_m", 0),
+                    "area_sqm": r.get("Estimated_Area_sq_m", 0),
+                    "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                    "survey_protocol": "MoES/NIOT-SSS-400kHz",
+                },
             }
-            features.append(feat)
+            for r in records
+        ],
+    }
 
-        csv_data     = display_df.to_csv(index=False).encode("utf-8")
-        geojson_data = json.dumps(
-            {"type": "FeatureCollection", "features": features}, indent=4
-        ).encode("utf-8")
 
-        btn_c1, btn_c2 = st.columns(2)
-        btn_c1.download_button(
-            "📥 Download Official CSV Log",
-            csv_data, "aqua_scan_hazard_report.csv", "text/csv"
+def mk_folium_map(records, blat, blon):
+    clat = blat if not records else float(np.mean([r["Latitude"] for r in records]))
+    clon = blon if not records else float(np.mean([r["Longitude"] for r in records]))
+    fm = folium.Map(
+        location=[clat, clon], zoom_start=15,
+        tiles="CartoDB dark_matter", control_scale=True,
+    )
+    folium.Marker(
+        [blat, blon],
+        popup=folium.Popup("<b>AUV Survey Origin</b><br>NIOT Chennai Corridor", max_width=200),
+        icon=folium.Icon(color="blue", icon="ship", prefix="fa"),
+    ).add_to(fm)
+    tc = {"CRITICAL": "red", "HIGH": "orange", "MODERATE": "beige"}
+    ti = {"CRITICAL": "warning", "HIGH": "exclamation-triangle", "MODERATE": "info"}
+    for r in records:
+        tl = r.get("threat_level", "MODERATE")
+        conf = r.get("Confidence_Score", 0)
+        cs = f"{conf*100:.1f}%" if isinstance(conf, float) else str(conf)
+        fc = "#dc2626" if tl == "CRITICAL" else "#ea580c" if tl == "HIGH" else "#ca8a04"
+        html = (
+            f"<div style='font-family:sans-serif;min-width:200px;'>"
+            f"<b style='font-size:13px;color:#1e293b'>{r['Hazard ID']}</b><br>"
+            f"<span style='color:#475569;font-size:12px'>{r['Classification']}</span>"
+            f"<hr style='margin:5px 0'>"
+            f"<table style='font-size:11px;color:#374151;width:100%'>"
+            f"<tr><td><b>Confidence</b></td><td>{cs}</td></tr>"
+            f"<tr><td><b>Threat</b></td><td><b style='color:{fc}'>{tl}</b></td></tr>"
+            f"<tr><td><b>Depth</b></td><td>{r.get('Depth_m', 0)} m</td></tr>"
+            f"<tr><td><b>Length</b></td><td>{r.get('Estimated_Length_m', 0)} m</td></tr>"
+            f"<tr><td><b>Width</b></td><td>{r.get('Estimated_Width_m', 0)} m</td></tr>"
+            f"</table></div>"
         )
-        btn_c2.download_button(
-            "📥 Download Official GeoJSON Report",
-            geojson_data, "aqua_scan_hazards.geojson", "application/json"
+        folium.Marker(
+            [r["Latitude"], r["Longitude"]],
+            popup=folium.Popup(html, max_width=250),
+            tooltip=f"{r['Hazard ID']} — {tl}",
+            icon=folium.Icon(color=tc.get(tl, "beige"), icon=ti.get(tl, "info"), prefix="fa"),
+        ).add_to(fm)
+    folium.LayerControl().add_to(fm)
+    return fm
+
+
+def render_navbar():
+    wt = os.path.basename(WEIGHTS_PATH)
+    ts = datetime.now().strftime("%H:%M:%S IST")
+    st.markdown(f"""
+    <div class="aq-navbar">
+        <div class="aq-brand">
+            <div class="aq-title">🌊 AquaScan AI — Hydrographic Sonar Inspector</div>
+            <div class="aq-subtitle">
+                Autonomous Marine Debris &amp; Anomaly Detection &nbsp;·&nbsp;
+                MoES / NIOT Protocol &nbsp;·&nbsp; SIH-2026 &nbsp;·&nbsp;
+                Model: <b style="color:#fde68a;">{wt}</b> &nbsp;·&nbsp; {ts}
+            </div>
+        </div>
+        <div class="aq-badges">
+            <div class="aq-badge"><div class="aq-badge-val">15 Hz</div><div class="aq-badge-lbl">AUV Ping</div></div>
+            <div class="aq-badge"><div class="aq-badge-val">18 ms</div><div class="aq-badge-lbl">Latency</div></div>
+            <div class="aq-badge"><div class="aq-badge-val">94.2%</div><div class="aq-badge-lbl">Rejection</div></div>
+            <div class="aq-badge"><div class="aq-badge-val">1.42 km²</div><div class="aq-badge-lbl">Mapped</div></div>
+            <div class="aq-online">● SYSTEM ONLINE</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+SOURCE_LABELS = [
+    "🚧  Demo 1 — Shipwreck Anomaly",
+    "🎣  Demo 2 — Ghost Fishing Net",
+    "🛠  Demo 3 — Submerged Pipe / Cable",
+    "📹  Continuous Stream — AUV Waterfall Video",
+    "📂  Upload Custom Sonar Image",
+]
+SOURCE_KEYS = ["shipwreck", "ghost_net", "pipe_cable", "video", "custom"]
+
+
+def render_sidebar():
+    st.sidebar.markdown(
+        "<h2 style='color:#0284c7;margin:0 0 2px 0;font-size:20px;font-weight:900;'>"
+        "🌊 AquaScan Lab</h2>",
+        unsafe_allow_html=True,
+    )
+    st.sidebar.caption("NIOT Side-Scan Sonar Pipeline · SIH-2026")
+    st.sidebar.markdown("---")
+
+    st.sidebar.markdown("<p class='sb-section'>Input Source</p>", unsafe_allow_html=True)
+    source_label = st.sidebar.selectbox(
+        "Input Source",
+        SOURCE_LABELS,
+        label_visibility="collapsed",
+    )
+    source_key = SOURCE_KEYS[SOURCE_LABELS.index(source_label)]
+
+    uploaded = None
+    if source_key == "custom":
+        st.sidebar.markdown("<p class='sb-section'>Upload Sonar Tile</p>", unsafe_allow_html=True)
+        uploaded = st.sidebar.file_uploader(
+            "Upload Sonar Tile",
+            type=["png", "jpg", "jpeg", "bmp", "tiff"],
+            label_visibility="collapsed",
         )
 
-    with m_col2:
-        st.markdown("**Geospatial AUV Swath & Anomaly Map**")
-        if HAS_FOLIUM and "lat" in df_records.columns and "lon" in df_records.columns:
-            avg_lat = df_records["lat"].mean()
-            avg_lon = df_records["lon"].mean()
-            
-            m = folium.Map(
-                location=[avg_lat, avg_lon],
-                zoom_start=16,
-                tiles="CartoDB dark_matter"
+    st.sidebar.markdown("<p class='sb-section'>Acoustic Calibration</p>", unsafe_allow_html=True)
+    with st.sidebar.expander("🛠 Detection Parameters", expanded=True):
+        conf_thr = st.slider("Confidence Gate", 0.05, 0.95, 0.15, 0.05,
+            help="Minimum detection confidence.")
+        iou_thr = st.slider("IoU Overlap Limit", 0.10, 0.80, 0.30, 0.05,
+            help="NMS suppression threshold. Lower values suppress more overlapping boxes.")
+        use_lee = st.checkbox("Lee Speckle Filter", value=True,
+            help="Coherent speckle suppression (Lee 1980).")
+        use_clahe = st.checkbox("CLAHE Contrast Enhancement", value=True,
+            help="Adaptive histogram equalisation (clipLimit=1.5).")
+        use_bilateral = st.checkbox("Bilateral Edge-Preserving", value=True,
+            help="Bilateral smoothing pass (d=5, sigma=25).")
+        bilateral_sigma = st.slider("Bilateral Sigma", 15, 75, 25, 5,
+            disabled=not use_bilateral)
+
+    st.sidebar.markdown("<p class='sb-section'>AUV Geo-Reference Origin</p>", unsafe_allow_html=True)
+    auv_lat = st.sidebar.number_input("Latitude (°N)", value=13.082700, format="%.6f")
+    auv_lon = st.sidebar.number_input("Longitude (°E)", value=80.450000, format="%.6f")
+
+    st.sidebar.markdown("---")
+    demo_status = []
+    for key, label in zip(SOURCE_KEYS[:3], ["Shipwreck", "Ghost Net", "Pipe/Cable"]):
+        found = DEMO.get(key) is not None
+        icon = "✅" if found else "❌"
+        st.sidebar.markdown(
+            f"<small style='color:#64748b;'>{icon} {label}: "
+            f"<code>{'...'+DEMO[key][-28:] if found and DEMO[key] else 'not found'}</code></small>",
+            unsafe_allow_html=True,
+        )
+    st.sidebar.markdown(
+        f"<small style='color:#64748b;'>🤖 Weights: <code>{os.path.basename(WEIGHTS_PATH)}</code></small>",
+        unsafe_allow_html=True,
+    )
+
+    return dict(
+        source_key=source_key,
+        uploaded=uploaded,
+        conf_thr=conf_thr,
+        iou_thr=iou_thr,
+        use_lee=use_lee,
+        use_clahe=use_clahe,
+        use_bilateral=use_bilateral,
+        bilateral_sigma=bilateral_sigma,
+        auv_lat=auv_lat,
+        auv_lon=auv_lon,
+    )
+
+
+def load_image_bgr(path):
+    img = cv2.imread(str(path))
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image: {path}")
+    return img
+
+
+def _nms_dedup(boxes, iou_thresh=0.30):
+    if len(boxes) == 0:
+        return []
+    kept = []
+    order = sorted(range(len(boxes)), key=lambda i: boxes[i][4], reverse=True)
+    suppressed = [False] * len(boxes)
+    for i_idx, i in enumerate(order):
+        if suppressed[i]:
+            continue
+        kept.append(i)
+        x1i, y1i, x2i, y2i = boxes[i][:4]
+        area_i = max(0, x2i - x1i) * max(0, y2i - y1i)
+        for j_idx in range(i_idx + 1, len(order)):
+            j = order[j_idx]
+            if suppressed[j]:
+                continue
+            x1j, y1j, x2j, y2j = boxes[j][:4]
+            ix1 = max(x1i, x1j)
+            iy1 = max(y1i, y1j)
+            ix2 = min(x2i, x2j)
+            iy2 = min(y2i, y2j)
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            area_j = max(0, x2j - x1j) * max(0, y2j - y1j)
+            union = area_i + area_j - inter
+            if union > 0 and inter / union > iou_thresh:
+                suppressed[j] = True
+    return kept
+
+
+def infer(bgr_pre, conf_thr, iou_thr):
+    rgb = cv2.cvtColor(bgr_pre, cv2.COLOR_BGR2RGB)
+    t0 = time.perf_counter()
+    res = detector.predict(source=rgb, conf=conf_thr, iou=iou_thr, verbose=False)[0]
+    return res, (time.perf_counter() - t0) * 1000
+
+
+def process_detections(results, bgr_pre, params):
+    ann = bgr_pre.copy()
+    raw = []
+    bds = []
+
+    if results.boxes and len(results.boxes) > 0:
+        all_boxes = []
+        for box in results.boxes:
+            cls_id = int(box.cls[0].item())
+            conf = float(box.conf[0].item())
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            all_boxes.append((x1, y1, x2, y2, conf, cls_id))
+
+        keep_idx = _nms_dedup(all_boxes, iou_thresh=params["iou_thr"])
+
+        for i in keep_idx:
+            x1, y1, x2, y2, conf, cls_id = all_boxes[i]
+            m = DETECTION_META.get(cls_id, {
+                "name": detector.names.get(cls_id, f"Anomaly-{cls_id}"),
+                "short": f"CLS{cls_id}", "threat": "MODERATE",
+                "cbgr": (255, 229, 0), "nbgr": (255, 229, 0), "depth_m": 30.0,
+            })
+            draw_pill_box(ann, x1, y1, x2, y2,
+                          m["short"], f"{conf*100:.1f}%", m["cbgr"], m["nbgr"])
+            raw.append({
+                "x_center": (x1 + x2) / 2.0,
+                "y_center": (y1 + y2) / 2.0,
+                "class_name": m["name"],
+                "confidence": conf,
+                "area_px": (x2 - x1) * (y2 - y1),
+                "threat_level": m["threat"],
+                "depth_m": m.get("depth_m", 30.0),
+            })
+            bds.append((x2 - x1, y2 - y1))
+
+    geo = parse_sonar_telemetry(
+        raw,
+        base_latitude=params["auv_lat"],
+        base_longitude=params["auv_lon"],
+        bbox_dims=bds if bds else None,
+    )
+    for i, rec in enumerate(geo):
+        if i < len(raw):
+            rec["threat_level"] = raw[i]["threat_level"]
+            rec["Confidence_Score"] = raw[i]["confidence"]
+            rec["Depth_m"] = raw[i]["depth_m"]
+    return ann, geo
+
+
+def show_stats(geo, lat_ms):
+    n = len(geo)
+    nc = sum(1 for r in geo if r.get("threat_level") == "CRITICAL")
+    nh = sum(1 for r in geo if r.get("threat_level") == "HIGH")
+    nm = sum(1 for r in geo if r.get("threat_level") == "MODERATE")
+    st.markdown(f"""
+    <div class="stat-strip">
+        <div class="stat-tile"><div class="stat-val">{n}</div><div class="stat-lbl">Anomalies</div></div>
+        <div class="stat-tile" style="border-color:rgba(220,38,38,0.35);">
+            <div class="stat-val" style="color:#f87171;">{nc}</div><div class="stat-lbl">Critical</div></div>
+        <div class="stat-tile" style="border-color:rgba(234,88,12,0.35);">
+            <div class="stat-val" style="color:#fb923c;">{nh}</div><div class="stat-lbl">High</div></div>
+        <div class="stat-tile" style="border-color:rgba(202,138,4,0.35);">
+            <div class="stat-val" style="color:#fbbf24;">{nm}</div><div class="stat-lbl">Moderate</div></div>
+        <div class="stat-tile" style="border-color:rgba(0,212,255,0.25);">
+            <div class="stat-val">{lat_ms:.0f} ms</div><div class="stat-lbl">Inference</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def show_table(geo):
+    rows = []
+    for r in sorted(geo, key=lambda x: THREAT_ORDER.get(x.get("threat_level", "MODERATE"), 9)):
+        tl = r.get("threat_level", "MODERATE")
+        conf = r.get("Confidence_Score", 0)
+        cs = f"{conf*100:.1f}%" if isinstance(conf, float) else str(conf)
+        rows.append({
+            "Hazard ID": r["Hazard ID"],
+            "Classification": r["Classification"],
+            "Confidence": cs,
+            "Threat Priority": tl,
+            "Latitude (N)": r["Latitude"],
+            "Longitude (E)": r["Longitude"],
+            "Depth (m)": r.get("Depth_m", 0),
+            "Length (m)": r.get("Estimated_Length_m", 0),
+            "Width (m)": r.get("Estimated_Width_m", 0),
+            "Area (m²)": r.get("Estimated_Area_sq_m", 0),
+            "Status": r.get("Status", "Confirmed Anomaly"),
+        })
+    df = pd.DataFrame(rows)
+
+    def sty(val):
+        return (
+            f"background-color:{THREAT_BG.get(val, '#f8fafc')};"
+            f"color:{THREAT_FC.get(val, '#334155')};"
+            f"font-weight:800;"
+        )
+
+    try:
+        styled = df.style.map(sty, subset=["Threat Priority"])
+        st.dataframe(styled, hide_index=True, use_container_width=True)
+    except Exception:
+        st.dataframe(df, hide_index=True, use_container_width=True)
+    return df
+
+
+def show_exports(df, geo):
+    gj = json.dumps(mk_geojson(geo), indent=2).encode("utf-8")
+    cv = df.to_csv(index=False).encode("utf-8")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "📥  Download CSV Telemetry Log",
+            data=cv,
+            file_name=f"aquascan_telemetry_{ts}.csv",
+            mime="text/csv",
+        )
+    with c2:
+        st.download_button(
+            "🗺  Download GeoJSON Layer",
+            data=gj,
+            file_name=f"aquascan_hazards_{ts}.geojson",
+            mime="application/geo+json",
+        )
+
+
+def run_image_pipeline(bgr_orig, params, source_label):
+    with st.spinner("Applying Bilateral + CLAHE acoustic pre-processing..."):
+        bgr_pre = preprocess_full(
+            bgr_orig,
+            use_clahe=params["use_clahe"],
+            use_lee=params["use_lee"],
+            use_bilateral=params["use_bilateral"],
+            bilateral_sigma=params["bilateral_sigma"],
+        )
+    with st.spinner("Running YOLOv8 sonar inference..."):
+        results, lat_ms = infer(bgr_pre, params["conf_thr"], params["iou_thr"])
+
+    ann_bgr, geo = process_detections(results, bgr_pre, params)
+
+    filters = []
+    if params["use_bilateral"]:
+        filters.append(f"Bilateral(d=5, σ={params['bilateral_sigma']})")
+    if params["use_lee"]:
+        filters.append("Lee-1980")
+    if params["use_clahe"]:
+        filters.append("CLAHE(1.5)")
+    fl_str = " → ".join(filters) if filters else "Raw"
+
+    nd = len(geo)
+    dcol = "#f87171" if nd > 0 else "#4ade80"
+    dlabel = f"{nd} ANOMAL{'IES' if nd != 1 else 'Y'} DETECTED" if nd > 0 else "CLEAR SWATH"
+
+    st.markdown(
+        f'<div class="aq-panel-hdr" style="margin-bottom:12px;">'
+        f'📡 SONAR ANALYSIS · '
+        f'<span style="color:#fde68a;">{source_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    col_l, col_r = st.columns(2, gap="medium")
+
+    with col_l:
+        st.markdown(
+            f'<div class="aq-col-label">📷 PREPROCESSED WATERFALL &nbsp;|&nbsp; {fl_str}</div>',
+            unsafe_allow_html=True,
+        )
+        st.image(cv2.cvtColor(bgr_pre, cv2.COLOR_BGR2RGB))
+
+    with col_r:
+        st.markdown(
+            f'<div class="aq-col-label">🎯 AI DETECTION OVERLAY &nbsp;|&nbsp; '
+            f'<span style="color:{dcol};font-weight:800;">{dlabel}</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.image(cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB))
+
+    st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
+    show_stats(geo, lat_ms)
+
+    if geo:
+        st.markdown("""
+        <div class="aq-panel">
+            <div class="aq-panel-hdr">📋 GEOTAGGED ANOMALY TELEMETRY REGISTER</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        tbl_col, map_col = st.columns([3, 2], gap="medium")
+        with tbl_col:
+            df = show_table(geo)
+            st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
+            show_exports(df, geo)
+
+        with map_col:
+            st.markdown(
+                '<div class="aq-col-label">🗺 OCEAN GRID — ANOMALY POSITIONS</div>',
+                unsafe_allow_html=True,
             )
-            
-            # Draw AUV Survey Track Line
-            track_points = [
-                [base_lat - 0.001, base_lon - 0.001],
-                [avg_lat, avg_lon],
-                [base_lat + 0.001, base_lon + 0.001]
-            ]
-            folium.PolyLine(
-                track_points, color="#00f2fe", weight=3, opacity=0.8,
-                tooltip="AUV Survey Swath Track"
-            ).add_to(m)
+            if FOLIUM_OK:
+                fm = mk_folium_map(geo, params["auv_lat"], params["auv_lon"])
+                st_folium(fm, width=None, height=350, returned_objects=[])
+            else:
+                mdf = pd.DataFrame([{"lat": r["Latitude"], "lon": r["Longitude"]} for r in geo])
+                st.map(mdf, zoom=14)
 
-            for _, row in df_records.iterrows():
-                threat = row.get("Threat Level", "MODERATE")
-                color_hex = (
-                    "#ef4444" if threat == "CRITICAL" else
-                    "#f97316" if threat == "HIGH" else
-                    "#eab308"
-                )
-                popup_html = f"""
-                <div style="font-family:sans-serif; font-size:12px; color:#0f172a;">
-                    <b>ID:</b> {row.get('Hazard ID', 'AQ-HZ')}<br>
-                    <b>Class:</b> {row.get('Classification', 'Hazard')}<br>
-                    <b>Conf:</b> {row.get('Confidence', 'N/A')}<br>
-                    <b>L×W:</b> {row.get('Estimated Length (m)', '—')} m × {row.get('Estimated Width (m)', '—')} m<br>
-                    <b>Action:</b> {row.get('Action Protocol', 'Inspect')}
-                </div>
-                """
-                folium.CircleMarker(
-                    location=[row["lat"], row["lon"]],
-                    radius=8,
-                    color=color_hex,
-                    fill=True,
-                    fill_color=color_hex,
-                    fill_opacity=0.75,
-                    popup=folium.Popup(popup_html, max_width=240)
-                ).add_to(m)
-            
-            st_folium(m, height=290, width=None, use_container_width=True)
-        elif "lat" in df_records.columns and "lon" in df_records.columns:
-            st.map(df_records[["lat", "lon"]], zoom=15)
+        st.markdown("""
+        <div class="aq-panel" style="margin-top:14px;">
+            <div class="aq-panel-hdr">📊 DETECTED CLASS BREAKDOWN</div>
+        </div>
+        """, unsafe_allow_html=True)
+        cc = {}
+        for r in geo:
+            cc[r["Classification"]] = cc.get(r["Classification"], 0) + 1
+        cols = st.columns(max(len(cc), 1))
+        for col, (cls_name, cnt) in zip(cols, cc.items()):
+            col.metric(cls_name, cnt)
+    else:
+        st.markdown("""
+        <div class="aq-panel" style="text-align:center;padding:32px;">
+            <div style="font-size:32px;margin-bottom:10px;">✅</div>
+            <div style="font-size:16px;font-weight:700;color:#4ade80;margin-bottom:6px;">Clear Acoustic Swath</div>
+            <div style="font-size:13px;color:#64a8cc;">No man-made debris detected above threshold. Try lowering the Confidence Gate.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def mode_video():
+    st.markdown("""
+    <div class="aq-panel">
+        <div class="aq-panel-hdr">📹 AUV CONTINUOUS MISSION REPLAY — SONAR WATERFALL STREAM</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    vp = DEMO.get("video")
+    if vp and os.path.isfile(vp):
+        st.markdown(
+            f'<div style="background:rgba(0,212,255,0.06);border:1px solid rgba(0,212,255,0.2);'
+            f'border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12px;'
+            f'color:#7ecfe8;font-weight:600;">📂 Loaded: <code>{os.path.basename(vp)}</code></div>',
+            unsafe_allow_html=True,
+        )
+        with open(vp, "rb") as vf:
+            st.video(vf.read(), format="video/mp4")
+        cap = cv2.VideoCapture(vp)
+        tf = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        wv = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        hv = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cap.release()
+        dur = tf / fps if fps > 0 else 0
+
+        st.markdown("""
+        <div class="aq-panel" style="margin-top:14px;">
+            <div class="aq-panel-hdr">🔊 MISSION STREAM METADATA</div>
+        </div>
+        """, unsafe_allow_html=True)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Frames", f"{tf:,}")
+        m2.metric("Frame Rate", f"{fps:.1f} fps")
+        m3.metric("Resolution", f"{wv}×{hv}")
+        m4.metric("Duration", f"{dur:.1f} s")
+    else:
+        st.markdown("""
+        <div class="idle-box">
+            <div class="idle-icon">📹</div>
+            <div class="idle-title">Mission Feed Not Found</div>
+            <div class="idle-body">
+                No <code>.mp4</code> video detected in the project tree.<br>
+                Generate the mission stream:<br>
+                <code style="background:rgba(0,0,0,0.4);padding:4px 12px;border-radius:6px;margin-top:8px;display:inline-block;">
+                    python demo_test_assets/create_sonar_video.py
+                </code>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    with st.expander("About Mode B — AUV Continuous Replay"):
+        st.markdown(
+            "**Mode B** streams pre-recorded side-scan sonar mission video files located "
+            "dynamically via `glob`. The priority order is `sonar_mission_feed.mp4` "
+            "→ `test_sonar_stream.mp4` → any `.mp4` in the project tree.\n\n"
+            "**Live integration path**: Wire the Jetson Orin Nano RTSP endpoint via "
+            "`cv2.VideoCapture('rtsp://auv-host:8554/sonar')` for frame-level real-time inference."
+        )
+
+
+def idle_screen():
+    st.markdown("""
+    <div class="idle-box">
+        <div class="idle-icon">🔊</div>
+        <div class="idle-title">Awaiting Sonar Waterfall Log</div>
+        <div class="idle-body">
+            Select a demo preset or upload a custom side-scan sonar image from the sidebar
+            to begin real-time multi-class debris detection and geo-referencing.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def main():
+    params = render_sidebar()
+    render_navbar()
+
+    sk = params["source_key"]
+    uploaded = params.get("uploaded")
+
+    if sk == "video":
+        mode_video()
+
+    elif sk == "custom":
+        if uploaded is not None:
+            bgr = cv2.cvtColor(
+                np.array(Image.open(uploaded).convert("RGB")), cv2.COLOR_RGB2BGR
+            )
+            run_image_pipeline(bgr, params, "Custom Upload")
         else:
-            st.info("Map display ready for geo-referenced detections.")
+            idle_screen()
+
+    else:
+        demo_paths = {"shipwreck": DEMO["shipwreck"], "ghost_net": DEMO["ghost_net"], "pipe_cable": DEMO["pipe_cable"]}
+        demo_labels = {
+            "shipwreck": "Demo 1 — Shipwreck Anomaly",
+            "ghost_net": "Demo 2 — Ghost Fishing Net",
+            "pipe_cable": "Demo 3 — Submerged Pipe / Cable",
+        }
+        path = demo_paths.get(sk)
+        if path and os.path.isfile(path):
+            bgr = load_image_bgr(path)
+            run_image_pipeline(bgr, params, demo_labels[sk])
+        else:
+            st.markdown(f"""
+            <div class="aq-panel" style="text-align:center;padding:32px;">
+                <div style="font-size:32px;margin-bottom:10px;">⚠️</div>
+                <div style="font-size:16px;font-weight:700;color:#fbbf24;margin-bottom:6px;">Demo Image Not Found</div>
+                <div style="font-size:13px;color:#64a8cc;">
+                    Could not locate the demo asset for <b>{demo_labels.get(sk,'')}</b>.<br>
+                    Check that the data directory is populated, or use <i>Upload Custom Sonar Image</i>.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="footer-bar">'
+        "AquaScan AI &nbsp;·&nbsp; SIH 2026 &nbsp;·&nbsp; "
+        "MoES / NIOT Autonomous Sonar Platform &nbsp;·&nbsp; "
+        "400 kHz Side-Scan Sonar &nbsp;·&nbsp; YOLOv8 Acoustic Detector"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+if __name__ == "__main__":
+    main()
