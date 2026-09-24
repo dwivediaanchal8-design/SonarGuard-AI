@@ -23,8 +23,13 @@ def lee_filter(img_gray, window_size=7):
     return np.clip(filtered, 0, 255).astype(np.uint8)
 
 
-def preprocess_sonar(img_bgr, clahe=True, denoise=True):
+def preprocess_sonar(img_bgr, clahe=False, denoise=False):
+    """Mild bilateral denoise only — preserves natural sonar acoustic texture.
+    Lee filter and CLAHE are available via keyword args but off by default
+    to prevent over-exposure of the grey seabed / shadow bands.
+    """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY) if len(img_bgr.shape) == 3 else img_bgr.copy()
+    # Mild edge-preserving smoothing — does NOT alter tonal range
     processed = cv2.bilateralFilter(gray, d=5, sigmaColor=25, sigmaSpace=25)
     if denoise:
         processed = lee_filter(processed)

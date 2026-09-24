@@ -463,13 +463,22 @@ detector = load_model(WEIGHTS_PATH)
 
 
 def preprocess_full(img_bgr, use_clahe, use_lee, use_bilateral, bilateral_sigma):
+    """Sonar preprocessing pipeline.
+    Default path: mild bilateral only (d=5, σ=25) to preserve natural grey-seabed
+    acoustic texture.  Lee speckle filter and CLAHE are opt-in via sidebar checkboxes.
+    """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY) if len(img_bgr.shape) == 3 else img_bgr.copy()
     out = gray.copy()
+    # Always apply mild bilateral when enabled — preserves edges, NO tonal clipping
     if use_bilateral:
-        out = cv2.bilateralFilter(out, d=5, sigmaColor=int(bilateral_sigma), sigmaSpace=int(bilateral_sigma))
+        sigma = int(bilateral_sigma)
+        out = cv2.bilateralFilter(out, d=5, sigmaColor=sigma, sigmaSpace=sigma)
+    # Optional Lee speckle suppression (coherent noise)
     if use_lee:
-        out = denoise_preprocess(cv2.cvtColor(out, cv2.COLOR_GRAY2BGR), clahe=False, denoise=True)
+        out = denoise_preprocess(cv2.cvtColor(out, cv2.COLOR_GRAY2BGR),
+                                 clahe=False, denoise=True)
         out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    # Optional CLAHE — mild clip limit only
     if use_clahe:
         clahe_obj = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         out = clahe_obj.apply(out)
@@ -477,9 +486,16 @@ def preprocess_full(img_bgr, use_clahe, use_lee, use_bilateral, bilateral_sigma)
 
 
 def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
-    cv2.rectangle(img, (x1 - 3, y1 - 3), (x2 + 3, y2 + 3), (0, 0, 0), 5)
+    """Draw a 3 px solid neon bounding box with a solid-black text badge.
+    nbgr  — per-class neon colour in BGR  (#00E5FF pipe | #FF1744 net | #FF9100 wreck)
+    cbgr  — corner accent colour (same as nbgr)
+    """
+    # ── Outer black halo (improves contrast on any sonar background) ──
+    cv2.rectangle(img, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 0), 5)
+    # ── 3 px solid neon border ──
     cv2.rectangle(img, (x1, y1), (x2, y2), nbgr, 3)
 
+    # ── Corner accent ticks ──
     cl = max(14, (x2 - x1) // 5)
     for ax, ay, hx, hy, vx, vy in [
         (x1, y1, x1 + cl, y1, x1, y1 + cl),
@@ -490,12 +506,13 @@ def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
         cv2.line(img, (ax, ay), (hx, hy), cbgr, 3)
         cv2.line(img, (ax, ay), (vx, vy), cbgr, 3)
 
-    top_line = f"{class_text}"
+    # ── Solid-black text badge ──
+    top_line = class_text
     bot_line = f"Conf: {conf_text}"
     font = cv2.FONT_HERSHEY_DUPLEX
     fs = max(0.42, min(0.68, (x2 - x1) / 300))
-    (tw1, th1), _ = cv2.getTextSize(top_line, font, fs, 1)
-    (tw2, th2), _ = cv2.getTextSize(bot_line, font, fs * 0.88, 1)
+    (tw1, th1), bl1 = cv2.getTextSize(top_line, font, fs, 1)
+    (tw2, th2), bl2 = cv2.getTextSize(bot_line, font, fs * 0.88, 1)
     pad_x, pad_y = 10, 6
     pill_w = max(tw1, tw2) + pad_x * 2
     pill_h = th1 + th2 + pad_y * 3
@@ -504,14 +521,18 @@ def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
     px2 = px1 + pill_w
     py2 = py1 + pill_h
 
-    overlay = img.copy()
-    cv2.rectangle(overlay, (px1, py1), (px2, py2), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.88, img, 0.12, 0, img)
+    # Solid black fill (no alpha blend) for maximum badge legibility
+    cv2.rectangle(img, (px1, py1), (px2, py2), (0, 0, 0), -1)
+    # Neon border on badge matches box colour
     cv2.rectangle(img, (px1, py1), (px2, py2), nbgr, 2)
+    # White class label
+    cv2.putText(img, top_line, (px1 + pad_x, py1 + pad_y + th1),
+                font, fs, (255, 255, 255), 2, cv2.LINE_AA)
     cv2.putText(img, top_line, (px1 + pad_x, py1 + pad_y + th1),
                 font, fs, (255, 255, 255), 1, cv2.LINE_AA)
+    # Neon confidence sub-label
     cv2.putText(img, bot_line, (px1 + pad_x, py1 + pad_y + th1 + pad_y + th2),
-                font, fs * 0.88, (200, 230, 255), 1, cv2.LINE_AA)
+                font, fs * 0.88, nbgr, 1, cv2.LINE_AA)
 
 
 def mk_geojson(records):
@@ -647,12 +668,12 @@ def render_sidebar():
             help="Minimum detection confidence.")
         iou_thr = st.slider("IoU Overlap Limit", 0.10, 0.80, 0.30, 0.05,
             help="NMS suppression threshold. Lower values suppress more overlapping boxes.")
-        use_lee = st.checkbox("Lee Speckle Filter", value=True,
-            help="Coherent speckle suppression (Lee 1980).")
-        use_clahe = st.checkbox("CLAHE Contrast Enhancement", value=True,
-            help="Adaptive histogram equalisation (clipLimit=1.5).")
+        use_lee = st.checkbox("Lee Speckle Filter", value=False,
+            help="Coherent speckle suppression (Lee 1980). Off by default to avoid over-processing.")
+        use_clahe = st.checkbox("CLAHE Contrast Enhancement", value=False,
+            help="Adaptive histogram equalisation (clipLimit=1.5). Off by default to preserve natural sonar texture.")
         use_bilateral = st.checkbox("Bilateral Edge-Preserving", value=True,
-            help="Bilateral smoothing pass (d=5, sigma=25).")
+            help="Mild bilateral smoothing (d=5, σ=25) — preserves edges without brightening.")
         bilateral_sigma = st.slider("Bilateral Sigma", 15, 75, 25, 5,
             disabled=not use_bilateral)
 
