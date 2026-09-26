@@ -884,7 +884,7 @@ def show_exports(df, geo):
 
 
 def run_image_pipeline(bgr_orig, params, source_label):
-    with st.spinner("Applying Bilateral + CLAHE acoustic pre-processing..."):
+    with st.spinner("Applying sonar pre-processing (bilateral filter)..."):
         bgr_pre = preprocess_full(
             bgr_orig,
             use_clahe=params["use_clahe"],
@@ -899,12 +899,12 @@ def run_image_pipeline(bgr_orig, params, source_label):
 
     filters = []
     if params["use_bilateral"]:
-        filters.append(f"Bilateral(d=5, σ={params['bilateral_sigma']})")
+        filters.append(f"Bilateral(d=5, s={params['bilateral_sigma']})")
     if params["use_lee"]:
         filters.append("Lee-1980")
     if params["use_clahe"]:
         filters.append("CLAHE(1.5)")
-    fl_str = " → ".join(filters) if filters else "Raw"
+    fl_str = " + ".join(filters) if filters else "Raw (no filter)"
 
     nd = len(geo)
     dcol = "#f87171" if nd > 0 else "#4ade80"
@@ -912,7 +912,7 @@ def run_image_pipeline(bgr_orig, params, source_label):
 
     st.markdown(
         f'<div class="aq-panel-hdr" style="margin-bottom:12px;">'
-        f'📡 SONAR ANALYSIS · '
+        f'\U0001f4e1 SONAR ANALYSIS · '
         f'<span style="color:#fde68a;">{source_label}</span>'
         f'</div>',
         unsafe_allow_html=True,
@@ -922,29 +922,30 @@ def run_image_pipeline(bgr_orig, params, source_label):
 
     with col_l:
         st.markdown(
-            f'<div class="aq-col-label">📷 PREPROCESSED WATERFALL &nbsp;|&nbsp; {fl_str}</div>',
+            f'<div class="aq-col-label">\U0001f4f7 PREPROCESSED WATERFALL &nbsp;|&nbsp; {fl_str}</div>',
             unsafe_allow_html=True,
         )
-        st.image(cv2.cvtColor(bgr_pre, cv2.COLOR_BGR2RGB))
+        st.image(cv2.cvtColor(bgr_pre, cv2.COLOR_BGR2RGB), use_container_width=True)
 
     with col_r:
         st.markdown(
-            f'<div class="aq-col-label">🎯 AI DETECTION OVERLAY &nbsp;|&nbsp; '
+            f'<div class="aq-col-label">\U0001f3af AI DETECTION OVERLAY &nbsp;|&nbsp; '
             f'<span style="color:{dcol};font-weight:800;">{dlabel}</span></div>',
             unsafe_allow_html=True,
         )
-        st.image(cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB))
+        st.image(cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB), use_container_width=True)
 
     st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
     show_stats(geo, lat_ms)
 
-    if geo:
-        st.markdown("""
-        <div class="aq-panel">
-            <div class="aq-panel-hdr">📋 GEOTAGGED ANOMALY TELEMETRY REGISTER</div>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── GEOTAGGED ANOMALY TELEMETRY REGISTER — always rendered ──────────────
+    st.markdown("""
+    <div class="aq-panel">
+        <div class="aq-panel-hdr">\U0001f4cb GEOTAGGED ANOMALY TELEMETRY REGISTER</div>
+    </div>
+    """, unsafe_allow_html=True)
 
+    if geo:
         tbl_col, map_col = st.columns([3, 2], gap="medium")
         with tbl_col:
             df = show_table(geo)
@@ -953,19 +954,21 @@ def run_image_pipeline(bgr_orig, params, source_label):
 
         with map_col:
             st.markdown(
-                '<div class="aq-col-label">🗺 OCEAN GRID — ANOMALY POSITIONS</div>',
+                '<div class="aq-col-label">\U0001f5fa OCEAN GRID \u2014 ANOMALY POSITIONS</div>',
                 unsafe_allow_html=True,
             )
             if FOLIUM_OK:
                 fm = mk_folium_map(geo, params["auv_lat"], params["auv_lon"])
                 st_folium(fm, width=None, height=350, returned_objects=[])
             else:
-                mdf = pd.DataFrame([{"lat": r["Latitude"], "lon": r["Longitude"]} for r in geo])
+                mdf = pd.DataFrame(
+                    [{"lat": r["Latitude"], "lon": r["Longitude"]} for r in geo]
+                )
                 st.map(mdf, zoom=14)
 
         st.markdown("""
         <div class="aq-panel" style="margin-top:14px;">
-            <div class="aq-panel-hdr">📊 DETECTED CLASS BREAKDOWN</div>
+            <div class="aq-panel-hdr">\U0001f4ca DETECTED CLASS BREAKDOWN</div>
         </div>
         """, unsafe_allow_html=True)
         cc = {}
@@ -977,69 +980,115 @@ def run_image_pipeline(bgr_orig, params, source_label):
     else:
         st.markdown("""
         <div class="aq-panel" style="text-align:center;padding:32px;">
-            <div style="font-size:32px;margin-bottom:10px;">✅</div>
+            <div style="font-size:32px;margin-bottom:10px;">\u2705</div>
             <div style="font-size:16px;font-weight:700;color:#4ade80;margin-bottom:6px;">Clear Acoustic Swath</div>
-            <div style="font-size:13px;color:#64a8cc;">No man-made debris detected above threshold. Try lowering the Confidence Gate.</div>
+            <div style="font-size:13px;color:#64a8cc;">No man-made debris detected above conf={params['conf_thr']:.2f}.<br>
+            Try lowering the <b>Confidence Gate</b> slider in the sidebar.</div>
         </div>
         """, unsafe_allow_html=True)
+
+
+def _ensure_video():
+    """Return a path to the demo video, auto-generating it if missing or tiny."""
+    vp = DEMO.get("video")
+    if vp and os.path.isfile(vp) and os.path.getsize(vp) > 50_000:
+        return vp
+    gen_script = os.path.join(ROOT_DIR, "demo_test_assets", "create_sonar_video.py")
+    if os.path.isfile(gen_script):
+        import subprocess as _sp
+        try:
+            r = _sp.run(
+                [sys.executable, gen_script],
+                cwd=ROOT_DIR, capture_output=True, timeout=120,
+            )
+            if r.returncode == 0:
+                candidate = os.path.join(
+                    ROOT_DIR, "demo_test_assets", "test_sonar_stream.mp4"
+                )
+                if os.path.isfile(candidate):
+                    return candidate
+        except Exception:
+            pass
+    return vp
 
 
 def mode_video():
     st.markdown("""
     <div class="aq-panel">
-        <div class="aq-panel-hdr">📹 AUV CONTINUOUS MISSION REPLAY — SONAR WATERFALL STREAM</div>
+        <div class="aq-panel-hdr">\U0001f4f9 AUV CONTINUOUS MISSION REPLAY \u2014 SONAR WATERFALL STREAM</div>
     </div>
     """, unsafe_allow_html=True)
 
-    vp = DEMO.get("video")
-    if vp and os.path.isfile(vp):
+    vp = _ensure_video()
+    if vp and os.path.isfile(vp) and os.path.getsize(vp) > 50_000:
         st.markdown(
             f'<div style="background:rgba(0,212,255,0.06);border:1px solid rgba(0,212,255,0.2);'
             f'border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12px;'
-            f'color:#7ecfe8;font-weight:600;">📂 Loaded: <code>{os.path.basename(vp)}</code></div>',
+            f'color:#7ecfe8;font-weight:600;">\U0001f4c2 Loaded: <code>{os.path.basename(vp)}</code></div>',
             unsafe_allow_html=True,
         )
+        # Load raw bytes -- ensures HTML5 browser playback regardless of container metadata
         with open(vp, "rb") as vf:
-            st.video(vf.read(), format="video/mp4")
+            video_bytes = vf.read()
+        st.video(video_bytes, format="video/mp4")
+
         cap = cv2.VideoCapture(vp)
         tf = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        fps_v = cap.get(cv2.CAP_PROP_FPS) or 12.0
         wv = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         hv = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fcc_val = int(cap.get(cv2.CAP_PROP_FOURCC))
+        fcc_str = fcc_val.to_bytes(4, "little").decode("ascii", errors="replace").strip()
         cap.release()
-        dur = tf / fps if fps > 0 else 0
+        dur = tf / fps_v if fps_v > 0 else 0
 
         st.markdown("""
         <div class="aq-panel" style="margin-top:14px;">
-            <div class="aq-panel-hdr">🔊 MISSION STREAM METADATA</div>
+            <div class="aq-panel-hdr">\U0001f50a MISSION STREAM METADATA</div>
         </div>
         """, unsafe_allow_html=True)
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Frames", f"{tf:,}")
-        m2.metric("Frame Rate", f"{fps:.1f} fps")
-        m3.metric("Resolution", f"{wv}×{hv}")
+        m2.metric("Frame Rate", f"{fps_v:.1f} fps")
+        m3.metric("Resolution", f"{wv}x{hv}")
         m4.metric("Duration", f"{dur:.1f} s")
+        m5.metric("Codec", fcc_str)
     else:
         st.markdown("""
         <div class="idle-box">
-            <div class="idle-icon">📹</div>
+            <div class="idle-icon">\U0001f4f9</div>
             <div class="idle-title">Mission Feed Not Found</div>
             <div class="idle-body">
-                No <code>.mp4</code> video detected in the project tree.<br>
-                Generate the mission stream:<br>
-                <code style="background:rgba(0,0,0,0.4);padding:4px 12px;border-radius:6px;margin-top:8px;display:inline-block;">
-                    python demo_test_assets/create_sonar_video.py
-                </code>
+                No <code>.mp4</code> video detected.<br>
+                Click below to auto-generate the H.264 mission stream.
             </div>
         </div>
         """, unsafe_allow_html=True)
-    with st.expander("About Mode B — AUV Continuous Replay"):
+        if st.button("Generate Sonar Mission Stream", type="primary"):
+            with st.spinner("Generating H.264 sonar stream (60 frames @ 12 FPS)..."):
+                gen_script = os.path.join(
+                    ROOT_DIR, "demo_test_assets", "create_sonar_video.py"
+                )
+                import subprocess as _sp2
+                r2 = _sp2.run(
+                    [sys.executable, gen_script],
+                    cwd=ROOT_DIR, capture_output=True, timeout=120,
+                )
+                if r2.returncode == 0:
+                    st.success("Stream generated! Reselect this mode to load it.")
+                else:
+                    st.error(
+                        "Generation failed: "
+                        + r2.stderr.decode(errors="replace")[-400:]
+                    )
+    with st.expander("About Mode B \u2014 AUV Continuous Replay"):
         st.markdown(
             "**Mode B** streams pre-recorded side-scan sonar mission video files located "
-            "dynamically via `glob`. The priority order is `sonar_mission_feed.mp4` "
-            "→ `test_sonar_stream.mp4` → any `.mp4` in the project tree.\n\n"
-            "**Live integration path**: Wire the Jetson Orin Nano RTSP endpoint via "
-            "`cv2.VideoCapture('rtsp://auv-host:8554/sonar')` for frame-level real-time inference."
+            "dynamically via `glob`. Priority: `sonar_mission_feed.mp4` "
+            "-> `test_sonar_stream.mp4` -> any `.mp4` in the project tree.\n\n"
+            "**Codec**: H.264 via imageio-ffmpeg bundled binary for full HTML5 compatibility.\n\n"
+            "**Live path**: Wire the Jetson Orin RTSP endpoint: "
+            "`cv2.VideoCapture('rtsp://auv-host:8554/sonar')` for real-time inference."
         )
 
 
