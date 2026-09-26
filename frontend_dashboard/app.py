@@ -368,32 +368,36 @@ div[data-testid="stDataFrame"] {
 
 st.markdown(_CSS, unsafe_allow_html=True)
 
+# Neon tactical colours per class — BGR order for OpenCV
+# Wreck/Hazard : #FF9900 → (  0, 153, 255)
+# Ghost Net    : #FF3366 → ( 51, 102, 255)  (adjusted for BGR: B=51,G=51,R=255)
+# Pipe/Cable   : #00E5FF → (255, 229,   0)  (BGR: B=255,G=229,R=0)
 DETECTION_META = {
     0: {
         "name": "Shipwreck / Solid Hazard",
         "short": "WRECK",
         "threat": "HIGH",
-        "cbgr": (0, 145, 255),
-        "nbgr": (0, 145, 255),
-        "mc": "#ff9100",
+        "cbgr": (0, 153, 255),   # #FF9900 in BGR
+        "nbgr": (0, 153, 255),
+        "mc": "#FF9900",
         "depth_m": 42.5,
     },
     1: {
         "name": "Ghost Fishing Net",
         "short": "GHOST-NET",
         "threat": "CRITICAL",
-        "cbgr": (68, 23, 255),
-        "nbgr": (68, 23, 255),
-        "mc": "#ff1744",
+        "cbgr": (102, 51, 255),  # #FF3366 in BGR
+        "nbgr": (102, 51, 255),
+        "mc": "#FF3366",
         "depth_m": 18.2,
     },
     2: {
         "name": "Submerged Pipe / Cable",
         "short": "PIPE/CABLE",
         "threat": "MODERATE",
-        "cbgr": (255, 229, 0),
+        "cbgr": (255, 229, 0),   # #00E5FF in BGR
         "nbgr": (255, 229, 0),
-        "mc": "#00e5ff",
+        "mc": "#00E5FF",
         "depth_m": 61.0,
     },
 }
@@ -464,21 +468,23 @@ detector = load_model(WEIGHTS_PATH)
 
 def preprocess_full(img_bgr, use_clahe, use_lee, use_bilateral, bilateral_sigma):
     """Sonar preprocessing pipeline.
-    Default path: mild bilateral only (d=5, σ=25) to preserve natural grey-seabed
-    acoustic texture.  Lee speckle filter and CLAHE are opt-in via sidebar checkboxes.
+    Default path: gentle bilateral only (d=5, sigmaColor=30, sigmaSpace=30) to
+    preserve natural dark-grey seabed acoustic texture and nadir shadow bands.
+    Pixel intensities are NEVER clipped to pure white — no overexposure.
+    Lee speckle filter and CLAHE are strictly opt-in.
     """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY) if len(img_bgr.shape) == 3 else img_bgr.copy()
     out = gray.copy()
-    # Always apply mild bilateral when enabled — preserves edges, NO tonal clipping
+    # Standard gentle bilateral — preserves edges and tonal range without blowout
     if use_bilateral:
-        sigma = int(bilateral_sigma)
+        sigma = max(10, min(75, int(bilateral_sigma)))  # guard against extremes
         out = cv2.bilateralFilter(out, d=5, sigmaColor=sigma, sigmaSpace=sigma)
-    # Optional Lee speckle suppression (coherent noise)
+    # Optional Lee speckle suppression (coherent noise) — off by default
     if use_lee:
         out = denoise_preprocess(cv2.cvtColor(out, cv2.COLOR_GRAY2BGR),
                                  clahe=False, denoise=True)
         out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-    # Optional CLAHE — mild clip limit only
+    # Optional CLAHE — mild clip limit, strictly opt-in
     if use_clahe:
         clahe_obj = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         out = clahe_obj.apply(out)
@@ -486,16 +492,26 @@ def preprocess_full(img_bgr, use_clahe, use_lee, use_bilateral, bilateral_sigma)
 
 
 def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
-    """Draw a 3 px solid neon bounding box with a solid-black text badge.
-    nbgr  — per-class neon colour in BGR  (#00E5FF pipe | #FF1744 net | #FF9100 wreck)
-    cbgr  — corner accent colour (same as nbgr)
+    """Ultra-visible tactical bounding box with high-contrast pill badge.
+
+    Visual layers (outermost → innermost):
+      1. 4 px outer solid BLACK trace — shadow for contrast on bright sonar texture
+      2. 3 px inner vibrant NEON stroke (per-class colour)
+      3. Corner accent ticks in neon colour
+      4. Solid dark pill badge: bold WHITE class label + neon confidence
+
+    nbgr — per-class neon BGR: #00E5FF pipe | #FF3366 net | #FF9900 wreck
+    cbgr — corner accent colour (same as nbgr)
     """
-    # ── Outer black halo (improves contrast on any sonar background) ──
-    cv2.rectangle(img, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 0), 5)
-    # ── 3 px solid neon border ──
+    h, w = img.shape[:2]
+    x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w - 1, x2), min(h - 1, y2)
+
+    # ── Layer 1: 4 px outer solid black shadow trace ──
+    cv2.rectangle(img, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 0, 0), 4)
+    # ── Layer 2: 3 px inner vibrant neon border ──
     cv2.rectangle(img, (x1, y1), (x2, y2), nbgr, 3)
 
-    # ── Corner accent ticks ──
+    # ── Layer 3: corner accent ticks ──
     cl = max(14, (x2 - x1) // 5)
     for ax, ay, hx, hy, vx, vy in [
         (x1, y1, x1 + cl, y1, x1, y1 + cl),
@@ -506,33 +522,29 @@ def draw_pill_box(img, x1, y1, x2, y2, class_text, conf_text, cbgr, nbgr):
         cv2.line(img, (ax, ay), (hx, hy), cbgr, 3)
         cv2.line(img, (ax, ay), (vx, vy), cbgr, 3)
 
-    # ── Solid-black text badge ──
-    top_line = class_text
-    bot_line = f"Conf: {conf_text}"
+    # ── Layer 4: solid pill badge (CLASS_NAME + CONF%) ──
+    badge_text = f"{class_text}  {conf_text}"   # e.g. "WRECK  87.4%"
     font = cv2.FONT_HERSHEY_DUPLEX
-    fs = max(0.42, min(0.68, (x2 - x1) / 300))
-    (tw1, th1), bl1 = cv2.getTextSize(top_line, font, fs, 1)
-    (tw2, th2), bl2 = cv2.getTextSize(bot_line, font, fs * 0.88, 1)
+    fs = max(0.44, min(0.70, (x2 - x1) / 280))
+    (tw, th), baseline = cv2.getTextSize(badge_text, font, fs, 2)
     pad_x, pad_y = 10, 6
-    pill_w = max(tw1, tw2) + pad_x * 2
-    pill_h = th1 + th2 + pad_y * 3
+    pill_w = tw + pad_x * 2
+    pill_h = th + pad_y * 2 + baseline
     px1 = x1
-    py1 = max(0, y1 - pill_h - 6)
-    px2 = px1 + pill_w
+    py1 = max(0, y1 - pill_h - 5)
+    px2 = min(w - 1, px1 + pill_w)
     py2 = py1 + pill_h
 
-    # Solid black fill (no alpha blend) for maximum badge legibility
-    cv2.rectangle(img, (px1, py1), (px2, py2), (0, 0, 0), -1)
-    # Neon border on badge matches box colour
+    # Dark background fill — maximises legibility over any sonar texture
+    cv2.rectangle(img, (px1, py1), (px2, py2), (10, 10, 10), -1)
+    # Neon outline on badge
     cv2.rectangle(img, (px1, py1), (px2, py2), nbgr, 2)
-    # White class label
-    cv2.putText(img, top_line, (px1 + pad_x, py1 + pad_y + th1),
-                font, fs, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(img, top_line, (px1 + pad_x, py1 + pad_y + th1),
-                font, fs, (255, 255, 255), 1, cv2.LINE_AA)
-    # Neon confidence sub-label
-    cv2.putText(img, bot_line, (px1 + pad_x, py1 + pad_y + th1 + pad_y + th2),
-                font, fs * 0.88, nbgr, 1, cv2.LINE_AA)
+    # Bold white class name
+    text_y = py1 + pad_y + th
+    cv2.putText(img, badge_text, (px1 + pad_x, text_y),
+                font, fs, (0, 0, 0), 4, cv2.LINE_AA)      # thick black drop shadow
+    cv2.putText(img, badge_text, (px1 + pad_x, text_y),
+                font, fs, (255, 255, 255), 2, cv2.LINE_AA)  # bold white label
 
 
 def mk_geojson(records):
@@ -665,16 +677,16 @@ def render_sidebar():
     st.sidebar.markdown("<p class='sb-section'>Acoustic Calibration</p>", unsafe_allow_html=True)
     with st.sidebar.expander("🛠 Detection Parameters", expanded=True):
         conf_thr = st.slider("Confidence Gate", 0.05, 0.95, 0.15, 0.05,
-            help="Minimum detection confidence.")
-        iou_thr = st.slider("IoU Overlap Limit", 0.10, 0.80, 0.30, 0.05,
-            help="NMS suppression threshold. Lower values suppress more overlapping boxes.")
+            help="Minimum detection confidence. Default 0.15 ensures all target anomalies trigger.")
+        iou_thr = st.slider("IoU Overlap Limit", 0.10, 0.80, 0.25, 0.05,
+            help="NMS suppression threshold. Default 0.25 avoids merging close detections.")
         use_lee = st.checkbox("Lee Speckle Filter", value=False,
             help="Coherent speckle suppression (Lee 1980). Off by default to avoid over-processing.")
         use_clahe = st.checkbox("CLAHE Contrast Enhancement", value=False,
             help="Adaptive histogram equalisation (clipLimit=1.5). Off by default to preserve natural sonar texture.")
         use_bilateral = st.checkbox("Bilateral Edge-Preserving", value=True,
-            help="Mild bilateral smoothing (d=5, σ=25) — preserves edges without brightening.")
-        bilateral_sigma = st.slider("Bilateral Sigma", 15, 75, 25, 5,
+            help="Gentle bilateral smoothing (d=5, σ=30) — preserves edges without overexposure.")
+        bilateral_sigma = st.slider("Bilateral Sigma", 15, 75, 30, 5,
             disabled=not use_bilateral)
 
     st.sidebar.markdown("<p class='sb-section'>AUV Geo-Reference Origin</p>", unsafe_allow_html=True)
@@ -823,6 +835,9 @@ def show_stats(geo, lat_ms):
 
 
 def show_table(geo):
+    """Render geotagged anomaly telemetry table.
+    Uses plain st.dataframe() — no Pandas Styler / applymap to avoid crashes.
+    """
     rows = []
     for r in sorted(geo, key=lambda x: THREAT_ORDER.get(x.get("threat_level", "MODERATE"), 9)):
         tl = r.get("threat_level", "MODERATE")
@@ -842,19 +857,8 @@ def show_table(geo):
             "Status": r.get("Status", "Confirmed Anomaly"),
         })
     df = pd.DataFrame(rows)
-
-    def sty(val):
-        return (
-            f"background-color:{THREAT_BG.get(val, '#f8fafc')};"
-            f"color:{THREAT_FC.get(val, '#334155')};"
-            f"font-weight:800;"
-        )
-
-    try:
-        styled = df.style.map(sty, subset=["Threat Priority"])
-        st.dataframe(styled, hide_index=True, use_container_width=True)
-    except Exception:
-        st.dataframe(df, hide_index=True, use_container_width=True)
+    # Crash-proof: use clean st.dataframe — no applymap / Styler calls
+    st.dataframe(df, hide_index=True, use_container_width=True)
     return df
 
 
