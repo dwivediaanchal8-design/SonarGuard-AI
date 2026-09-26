@@ -50,6 +50,7 @@ header[data-testid="stHeader"] {
     height: 0 !important;
 }
 
+/* ── Sidebar base ──────────────────────────────────────────────────────── */
 section[data-testid="stSidebar"] {
     background: #f8fafc !important;
     border-right: 2px solid #dde3ed !important;
@@ -72,58 +73,120 @@ section[data-testid="stSidebar"] label {
     letter-spacing: 0.03em !important;
 }
 
+/* ── ALL sidebar input widgets: white bg, dark text, grey border ────── */
 section[data-testid="stSidebar"] .stSelectbox > div,
 section[data-testid="stSidebar"] .stSelectbox > div > div,
 section[data-testid="stSidebar"] .stSelectbox > div > div > div,
 section[data-testid="stSidebar"] .stFileUploader > div,
 section[data-testid="stSidebar"] .stNumberInput > div,
-section[data-testid="stSidebar"] .stNumberInput > div > div {
-    background-color: #f1f5f9 !important;
+section[data-testid="stSidebar"] .stNumberInput > div > div,
+section[data-testid="stSidebar"] .stTextInput > div,
+section[data-testid="stSidebar"] .stTextInput > div > div {
+    background-color: #ffffff !important;
     color: #0f172a !important;
-    border: 1px solid #cbd5e1 !important;
+    border: 1.5px solid #cbd5e1 !important;
     border-radius: 8px !important;
 }
 
+/* BaseWeb select inner divs */
 section[data-testid="stSidebar"] .stSelectbox > div > div > div > div,
 section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
 section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] span,
 section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] div {
-    background-color: #f1f5f9 !important;
-    color: #0f172a !important;
-}
-
-section[data-testid="stSidebar"] input,
-section[data-testid="stSidebar"] input[type="number"],
-section[data-testid="stSidebar"] input[type="text"] {
-    background-color: #f1f5f9 !important;
-    color: #0f172a !important;
-    border: 1px solid #cbd5e1 !important;
-    border-radius: 6px !important;
-    -webkit-text-fill-color: #0f172a !important;
-}
-
-section[data-testid="stSidebar"] [data-baseweb="popover"] li,
-section[data-testid="stSidebar"] [data-baseweb="popover"] ul {
     background-color: #ffffff !important;
     color: #0f172a !important;
 }
 
-section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
-    background-color: #e0f2fe !important;
+/* Raw input elements */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] input[type="number"],
+section[data-testid="stSidebar"] input[type="text"],
+section[data-testid="stSidebar"] textarea {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1.5px solid #cbd5e1 !important;
+    border-radius: 6px !important;
+    -webkit-text-fill-color: #0f172a !important;
+    caret-color: #0284c7 !important;
 }
 
+/* BaseWeb generic input containers */
+section[data-testid="stSidebar"] [data-baseweb="base-input"],
+section[data-testid="stSidebar"] [data-baseweb="input"],
+section[data-testid="stSidebar"] [data-baseweb="select"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+}
+
+/* Dropdown popover */
+section[data-testid="stSidebar"] [data-baseweb="popover"],
+section[data-testid="stSidebar"] [data-baseweb="popover"] ul,
+section[data-testid="stSidebar"] [data-baseweb="menu"] {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="popover"] li,
+section[data-testid="stSidebar"] [data-baseweb="menu"] li {
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+}
+
+section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover,
+section[data-testid="stSidebar"] [data-baseweb="menu"] li:hover {
+    background-color: #e0f2fe !important;
+    color: #0284c7 !important;
+}
+
+/* Slider */
+section[data-testid="stSidebar"] [data-testid="stSlider"] p,
+section[data-testid="stSidebar"] [data-testid="stSlider"] span {
+    color: #334155 !important;
+    font-weight: 600 !important;
+}
+
+/* Checkbox */
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] span,
+section[data-testid="stSidebar"] [data-testid="stCheckbox"] p {
+    color: #334155 !important;
+    font-size: 13px !important;
+}
+
+/* Expander in sidebar */
+section[data-testid="stSidebar"] [data-testid="stExpander"],
+section[data-testid="stSidebar"] details {
+    background: #f1f5f9 !important;
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 10px !important;
+}
+section[data-testid="stSidebar"] details summary {
+    color: #0f172a !important;
+    font-weight: 700 !important;
+}
+
+/* Caption / small text */
+section[data-testid="stSidebar"] small {
+    color: #64748b !important;
+}
+
+/* ── Main content ──────────────────────────────────────────────────────── */
 .block-container {
     padding: 1rem 1.8rem 2rem 1.8rem !important;
     max-width: 100% !important;
 }
 
+/* ── Navbar ────────────────────────────────────────────────────────────── */
 .aq-navbar {
     background: linear-gradient(120deg, #020c1e 0%, #0a1f3d 45%, #051b38 100%);
-    border: 1px solid rgba(0, 212, 255, 0.15);
+    border: 1px solid rgba(0, 212, 255, 0.18);
     border-radius: 16px;
     padding: 20px 32px;
     margin-bottom: 20px;
-    box-shadow: 0 0 40px rgba(0, 212, 255, 0.08), inset 0 1px 0 rgba(255,255,255,0.05);
+    box-shadow: 0 0 48px rgba(0, 212, 255, 0.10), inset 0 1px 0 rgba(255,255,255,0.05);
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -131,11 +194,7 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     gap: 16px;
 }
 
-.aq-brand {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
+.aq-brand { display: flex; flex-direction: column; gap: 4px; }
 
 .aq-title {
     font-size: 26px;
@@ -144,7 +203,7 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     letter-spacing: 0.06em;
     text-transform: uppercase;
     line-height: 1;
-    text-shadow: 0 0 30px rgba(0,212,255,0.4);
+    text-shadow: 0 0 32px rgba(0,212,255,0.45);
 }
 
 .aq-subtitle {
@@ -154,39 +213,26 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     letter-spacing: 0.08em;
 }
 
-.aq-badges {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    align-items: center;
-}
+.aq-badges { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
 .aq-badge {
     display: flex;
     flex-direction: column;
     align-items: center;
-    background: rgba(0, 212, 255, 0.06);
-    border: 1px solid rgba(0, 212, 255, 0.25);
+    background: rgba(0, 212, 255, 0.07);
+    border: 1px solid rgba(0, 212, 255, 0.28);
     border-radius: 10px;
     padding: 8px 16px;
     min-width: 88px;
-    backdrop-filter: blur(4px);
+    backdrop-filter: blur(6px);
+    transition: border-color 0.2s;
 }
+.aq-badge:hover { border-color: rgba(0,212,255,0.55); }
 
-.aq-badge-val {
-    font-size: 18px;
-    font-weight: 800;
-    color: #00d4ff;
-    line-height: 1.1;
-}
-
+.aq-badge-val { font-size: 18px; font-weight: 800; color: #00d4ff; line-height: 1.1; }
 .aq-badge-lbl {
-    font-size: 10px;
-    color: #7ecfe8;
-    font-weight: 600;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    margin-top: 3px;
+    font-size: 10px; color: #7ecfe8; font-weight: 600;
+    letter-spacing: 0.07em; text-transform: uppercase; margin-top: 3px;
 }
 
 .aq-online {
@@ -198,9 +244,16 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.06em;
-    box-shadow: 0 0 16px rgba(52, 211, 153, 0.2);
+    box-shadow: 0 0 18px rgba(52, 211, 153, 0.22);
+    animation: pulse-green 2.5s infinite;
 }
 
+@keyframes pulse-green {
+    0%, 100% { box-shadow: 0 0 18px rgba(52,211,153,0.22); }
+    50%       { box-shadow: 0 0 28px rgba(52,211,153,0.45); }
+}
+
+/* ── Panel cards ───────────────────────────────────────────────────────── */
 .aq-panel {
     background: linear-gradient(145deg, #0b1a30 0%, #0d1f38 100%);
     border: 1px solid rgba(0,212,255,0.12);
@@ -237,12 +290,8 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     display: inline-block;
 }
 
-.stat-strip {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 18px;
-}
+/* ── Stat strip ────────────────────────────────────────────────────────── */
+.stat-strip { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
 
 .stat-tile {
     flex: 1;
@@ -252,24 +301,17 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     border-radius: 12px;
     padding: 14px 16px;
     text-align: center;
+    transition: border-color 0.2s, transform 0.15s;
 }
+.stat-tile:hover { border-color: rgba(0,212,255,0.38); transform: translateY(-2px); }
 
-.stat-val {
-    font-size: 28px;
-    font-weight: 900;
-    color: #00d4ff;
-    line-height: 1;
-}
-
+.stat-val { font-size: 28px; font-weight: 900; color: #00d4ff; line-height: 1; }
 .stat-lbl {
-    font-size: 11px;
-    font-weight: 700;
-    color: #64748b;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    margin-top: 4px;
+    font-size: 11px; font-weight: 700; color: #64748b;
+    text-transform: uppercase; letter-spacing: 0.07em; margin-top: 4px;
 }
 
+/* ── Idle / empty state ────────────────────────────────────────────────── */
 .idle-box {
     background: linear-gradient(145deg, #0b1a30, #0a1628);
     border: 1px solid rgba(0,212,255,0.12);
@@ -277,91 +319,44 @@ section[data-testid="stSidebar"] [data-baseweb="popover"] li:hover {
     padding: 56px 32px;
     text-align: center;
 }
+.idle-icon  { font-size: 52px; margin-bottom: 14px; }
+.idle-title { font-size: 20px; font-weight: 800; color: #e0f2fe; margin-bottom: 8px; }
+.idle-body  { font-size: 13px; color: #64a8cc; line-height: 1.7; max-width: 420px; margin: 0 auto; }
 
-.idle-icon {
-    font-size: 52px;
-    margin-bottom: 14px;
-}
-
-.idle-title {
-    font-size: 20px;
-    font-weight: 800;
-    color: #e0f2fe;
-    margin-bottom: 8px;
-}
-
-.idle-body {
-    font-size: 13px;
-    color: #64a8cc;
-    line-height: 1.7;
-    max-width: 420px;
-    margin: 0 auto;
-}
-
+/* ── Sidebar section labels ────────────────────────────────────────────── */
 .sb-section {
-    font-size: 11px;
-    font-weight: 800;
-    color: #475569;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin: 16px 0 6px 0;
-    padding-bottom: 4px;
+    font-size: 11px; font-weight: 800; color: #475569;
+    text-transform: uppercase; letter-spacing: 0.1em;
+    margin: 16px 0 6px 0; padding-bottom: 4px;
     border-bottom: 1px solid #e2e8f0;
 }
 
+/* ── Threat pills ──────────────────────────────────────────────────────── */
 .threat-pill-CRITICAL {
-    display: inline-block;
-    background: #fee2e2;
-    color: #991b1b;
-    border: 1.5px solid #fca5a5;
-    border-radius: 20px;
-    padding: 2px 10px;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    display: inline-block; background: #fee2e2; color: #991b1b;
+    border: 1.5px solid #fca5a5; border-radius: 20px; padding: 2px 10px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
 }
-
 .threat-pill-HIGH {
-    display: inline-block;
-    background: #ffedd5;
-    color: #9a3412;
-    border: 1.5px solid #fdba74;
-    border-radius: 20px;
-    padding: 2px 10px;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    display: inline-block; background: #ffedd5; color: #9a3412;
+    border: 1.5px solid #fdba74; border-radius: 20px; padding: 2px 10px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
 }
-
 .threat-pill-MODERATE {
-    display: inline-block;
-    background: #fef9c3;
-    color: #854d0e;
-    border: 1.5px solid #fde047;
-    border-radius: 20px;
-    padding: 2px 10px;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
+    display: inline-block; background: #fef9c3; color: #854d0e;
+    border: 1.5px solid #fde047; border-radius: 20px; padding: 2px 10px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
 }
 
-div[data-testid="stDataFrame"] {
-    border-radius: 10px !important;
-}
+div[data-testid="stDataFrame"] { border-radius: 10px !important; }
 
+/* ── Footer ────────────────────────────────────────────────────────────── */
 .footer-bar {
-    margin-top: 32px;
-    padding: 14px 20px;
+    margin-top: 32px; padding: 14px 20px;
     background: rgba(11,26,48,0.8);
     border-top: 1px solid rgba(0,212,255,0.1);
-    border-radius: 10px;
-    text-align: center;
-    font-size: 11px;
-    color: #475569;
-    letter-spacing: 0.05em;
+    border-radius: 10px; text-align: center;
+    font-size: 11px; color: #475569; letter-spacing: 0.05em;
 }
 </style>
 """
@@ -729,7 +724,7 @@ def load_image_bgr(path):
     return img
 
 
-def _nms_dedup(boxes, iou_thresh=0.30):
+def _nms_dedup(boxes, iou_thresh=0.25):
     if len(boxes) == 0:
         return []
     kept = []
@@ -836,28 +831,36 @@ def show_stats(geo, lat_ms):
 
 def show_table(geo):
     """Render geotagged anomaly telemetry table.
-    Uses plain st.dataframe() — no Pandas Styler / applymap to avoid crashes.
+    Crash-proof: plain st.dataframe — zero Pandas Styler / applymap calls.
+    Confidence_Score may arrive as float (0-1), percent string, or 0 — all handled.
     """
     rows = []
     for r in sorted(geo, key=lambda x: THREAT_ORDER.get(x.get("threat_level", "MODERATE"), 9)):
         tl = r.get("threat_level", "MODERATE")
-        conf = r.get("Confidence_Score", 0)
-        cs = f"{conf*100:.1f}%" if isinstance(conf, float) else str(conf)
+        raw_conf = r.get("Confidence_Score", 0)
+        if isinstance(raw_conf, float):
+            cs = f"{raw_conf * 100:.1f}%"
+        elif isinstance(raw_conf, str) and raw_conf.endswith("%"):
+            cs = raw_conf   # already formatted by geotag_engine
+        else:
+            try:
+                cs = f"{float(raw_conf) * 100:.1f}%"
+            except (TypeError, ValueError):
+                cs = str(raw_conf)
         rows.append({
-            "Hazard ID": r["Hazard ID"],
-            "Classification": r["Classification"],
-            "Confidence": cs,
+            "Hazard ID":       r["Hazard ID"],
+            "Anomaly Type":    r["Classification"],
+            "Confidence (%)": cs,
             "Threat Priority": tl,
-            "Latitude (N)": r["Latitude"],
-            "Longitude (E)": r["Longitude"],
-            "Depth (m)": r.get("Depth_m", 0),
-            "Length (m)": r.get("Estimated_Length_m", 0),
-            "Width (m)": r.get("Estimated_Width_m", 0),
-            "Area (m²)": r.get("Estimated_Area_sq_m", 0),
-            "Status": r.get("Status", "Confirmed Anomaly"),
+            "Latitude (N)":    r["Latitude"],
+            "Longitude (E)":   r["Longitude"],
+            "Depth (m)":       r.get("Depth_m", 0),
+            "Length (m)":      r.get("Estimated_Length_m", 0),
+            "Width (m)":       r.get("Estimated_Width_m", 0),
+            "Area (m2)":       r.get("Estimated_Area_sq_m", 0),
+            "Status":          r.get("Status", "Confirmed Anomaly"),
         })
     df = pd.DataFrame(rows)
-    # Crash-proof: use clean st.dataframe — no applymap / Styler calls
     st.dataframe(df, hide_index=True, use_container_width=True)
     return df
 
@@ -978,14 +981,16 @@ def run_image_pipeline(bgr_orig, params, source_label):
         for col, (cls_name, cnt) in zip(cols, cc.items()):
             col.metric(cls_name, cnt)
     else:
-        st.markdown("""
-        <div class="aq-panel" style="text-align:center;padding:32px;">
-            <div style="font-size:32px;margin-bottom:10px;">\u2705</div>
-            <div style="font-size:16px;font-weight:700;color:#4ade80;margin-bottom:6px;">Clear Acoustic Swath</div>
-            <div style="font-size:13px;color:#64a8cc;">No man-made debris detected above conf={params['conf_thr']:.2f}.<br>
-            Try lowering the <b>Confidence Gate</b> slider in the sidebar.</div>
-        </div>
-        """, unsafe_allow_html=True)
+        conf_display = f"{params['conf_thr']:.2f}"
+        st.markdown(
+            f'<div class="aq-panel" style="text-align:center;padding:32px;">'
+            f'<div style="font-size:32px;margin-bottom:10px;">\u2705</div>'
+            f'<div style="font-size:16px;font-weight:700;color:#4ade80;margin-bottom:6px;">Clear Acoustic Swath</div>'
+            f'<div style="font-size:13px;color:#64a8cc;">No debris detected above conf threshold <b>{conf_display}</b>.<br>'
+            f'Lower the <b>Confidence Gate</b> slider in the sidebar to reveal weaker signatures.</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def _ensure_video():
